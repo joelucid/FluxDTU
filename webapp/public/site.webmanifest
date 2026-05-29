@@ -1,0 +1,13 @@
+{
+    "name": "FluxDTU",
+    "short_name": "FluxDTU",
+    "display": "standalone",
+    "orientation": "portrait",
+    "icons": [
+        {
+            "src": "/favicon.png",
+            "sizes": "144x144",
+            "type": "image/png"
+        }
+    ]
+}

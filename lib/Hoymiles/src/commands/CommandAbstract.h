@@ -1,0 +1,86 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
+#pragma once
+
+#include "types.h"
+#include <Stream.h>
+#include <WString.h>
+#include <cstdint>
+
+#define RF_LEN 32
+#define MAX_RESEND_COUNT 4 // Used if all packages are missing
+#define MAX_RETRANSMIT_COUNT 5 // Used to send the retransmit package
+
+class InverterAbstract;
+
+enum class QueueInsertType {
+    AllowMultiple,
+    // Remove from  beginning of the queue
+    RemoveOldest,
+
+    // Don't insert command if it already exist
+    RemoveNewest,
+
+    // Replace the existing entry in the queue by the one to be added
+    ReplaceExistent,
+};
+
+class CommandAbstract {
+public:
+    explicit CommandAbstract(InverterAbstract* inv, const uint64_t router_address = 0);
+    virtual ~CommandAbstract() { };
+
+    const uint8_t* getDataPayload();
+    String dumpDataPayload();
+
+    uint8_t getDataSize() const;
+
+    uint64_t getTargetAddress() const;
+
+    void setRouterAddress(const uint64_t address);
+    uint64_t getRouterAddress() const;
+
+    void setTimeout(const uint32_t timeout);
+    uint32_t getTimeout() const;
+
+    virtual String getCommandName() const = 0;
+
+    void setSendCount(const uint8_t count);
+    uint8_t getSendCount() const;
+    uint8_t incrementSendCount();
+
+    virtual CommandAbstract* getRequestFrameCommand(const uint8_t frame_no);
+
+    virtual bool handleResponse(const fragment_t fragment[], const uint8_t max_fragment_id) = 0;
+    virtual void handleTxResult(const bool success);
+    virtual void gotTimeout();
+
+    // Sets the amount how often the specific command is resent if all fragments where missing
+    virtual uint8_t getMaxResendCount() const;
+
+    // Sets the amount of NRF hardware auto retransmits while waiting for auto ACK.
+    virtual uint8_t getHardwareRetryCount() const { return 15; }
+
+    // Sets the amount how often a missing fragment is re-requested if it was not available
+    virtual uint8_t getMaxRetransmitCount() const;
+
+    // Returns whether multiple instances of this command are allowed in the command queue.
+    virtual QueueInsertType getQueueInsertType() const { return QueueInsertType::RemoveNewest; }
+    virtual bool isHighPriority() const { return false; }
+    virtual bool isCompleteOnTxSuccess() const { return false; }
+    virtual bool areSameParameter(CommandAbstract* other);
+
+protected:
+    uint8_t _payload[RF_LEN];
+    uint8_t _payload_size;
+    uint32_t _timeout;
+    uint8_t _sendCount;
+
+    uint64_t _targetAddress;
+    uint64_t _routerAddress;
+
+    InverterAbstract* _inv;
+
+private:
+    void setTargetAddress(const uint64_t address);
+    static void convertSerialToPacketId(uint8_t buffer[], const uint64_t serial);
+};

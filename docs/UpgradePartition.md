@@ -1,0 +1,3 @@
+# Moved
+
+Have a look at the inherited [OpenDTU-OnBattery documentation](https://opendtu-onbattery.net/firmware/howto/upgrade_8mb/).

@@ -1,0 +1,30 @@
+[
+  {
+    "name": "Freenove ESP32-S3 WROOM NRF24",
+    "nrf24": {
+      "miso": 16,
+      "mosi": 17,
+      "clk": 18,
+      "irq": 3,
+      "en": 4,
+      "cs": 5
+    },
+    "battery": {
+      "rx": 6,
+      "tx": 7
+    },
+    "huawei": {
+      "miso": 13,
+      "mosi": 11,
+      "clk": 12,
+      "cs": 10,
+      "irq": 9,
+      "rx": -1,
+      "tx": -1,
+      "power": -1
+    },
+    "eth": {
+      "enabled": false
+    }
+  }
+]

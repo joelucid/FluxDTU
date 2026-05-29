@@ -1,0 +1,265 @@
+name: FluxDTU Build
+
+on:
+  push:
+    paths-ignore:
+      - docs/**
+      - '**/*.md'
+    branches:
+      - master
+      - development
+    tags-ignore:
+      - 'v**'
+  pull_request:
+    paths-ignore:
+      - docs/**
+      - '**/*.md'
+
+jobs:
+  get_default_envs:
+    name: Gather Environments
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Cache pip
+        uses: actions/cache@v5
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.x"
+
+      - name: Install PlatformIO
+        run: |
+          python -m pip install --upgrade pip
+          pip install --upgrade platformio
+
+      - name: Get default environments
+        id: envs
+        run: |
+          echo "environments=$(pio project config --json-output | jq -cr '.[1][1][0][1]|split(",")')" >> $GITHUB_OUTPUT
+
+    outputs:
+      environments: ${{ steps.envs.outputs.environments }}
+
+  build:
+    name: Build Environments
+    runs-on: ubuntu-24.04
+    needs: get_default_envs
+    strategy:
+      matrix:
+        environment: ${{ fromJSON(needs.get_default_envs.outputs.environments) }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Get tags
+        run: git fetch --force --tags origin
+
+      - name: Create and switch to a meaningful branch for pull-requests
+        if: github.event_name == 'pull_request'
+        run: |
+          OWNER=${{ github.repository_owner }}
+          NAME=${{ github.event.repository.name }}
+          ID=${{ github.event.pull_request.number }}
+          DATE=$(date +'%Y%m%d%H%M')
+          git switch -c ${OWNER}/${NAME}/pr${ID}-${DATE}
+
+      - name: Cache pip
+        uses: actions/cache@v5
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
+      - name: Cache PlatformIO
+        uses: actions/cache@v5
+        with:
+          path: ~/.platformio
+          key: ${{ runner.os }}-${{ hashFiles('**/lockfiles') }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.x"
+
+      - name: Install PlatformIO
+        run: |
+          python -m pip install --upgrade pip
+          pip install --upgrade platformio setuptools
+
+      - name: Enable Corepack
+        run: |
+            cd webapp
+            corepack enable
+
+      - name: Setup Node.js and yarn
+        uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          cache: "yarn"
+          cache-dependency-path: "webapp/yarn.lock"
+
+      - name: Install WebApp dependencies
+        run: |
+            cd webapp
+            yarn install --frozen-lockfile
+
+      - name: Build WebApp
+        run: |
+            cd webapp
+            yarn build
+
+      - name: Build firmware
+        run: pio run -e ${{ matrix.environment }}
+
+      - name: Rename Firmware
+        run: mv .pio/build/${{ matrix.environment }}/firmware.bin .pio/build/${{ matrix.environment }}/fluxdtu-${{ matrix.environment }}.bin
+
+      - name: Rename Factory Firmware
+        run: mv .pio/build/${{ matrix.environment }}/firmware.factory.bin .pio/build/${{ matrix.environment }}/fluxdtu-${{ matrix.environment }}.factory.bin
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: fluxdtu-${{ matrix.environment }}
+          path: |
+            .pio/build/${{ matrix.environment }}/fluxdtu-${{ matrix.environment }}.bin
+            !.pio/build/generic_esp32_4mb_no_ota/fluxdtu-generic_esp32_4mb_no_ota.bin
+            .pio/build/${{ matrix.environment }}/fluxdtu-${{ matrix.environment }}.factory.bin
+
+  # This snippet is public-domain, taken from
+  # https://github.com/oprypin/nightly.link/blob/master/.github/workflows/pr-comment.yml
+  # and modified to store the comment as an artifact instead of posting it because
+  # the action does not have sufficient permissions to post a comment when triggered
+  # by a forked repository.
+  # source: https://github.com/live-codes/pr-comment-from-artifact/blob/main/action.yml
+  generate_pr_artifacts_comment:
+    name: Generate PR artifacts comment and store it as artifact
+    needs: build
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Generate PR artifacts comment
+        id: generate_pr_artifacts_comment
+        uses: actions/github-script@v9
+        with:
+          script: |
+            const {owner, repo} = context.repo;
+
+            const artifacts = await github.paginate(
+              github.rest.actions.listWorkflowRunArtifacts,
+              {
+                owner,
+                repo,
+                run_id: context.runId
+              }
+            );
+
+            if (!artifacts.length) {
+              return core.error(`No artifacts found`);
+            }
+
+            let body = `### Build Artifacts\n\nFirmware built from this pull request's code:\n`;
+            for (const art of artifacts) {
+              body += `\n* [${art.name}.zip](https://nightly.link/${owner}/${repo}/actions/artifacts/${art.id}.zip)`;
+            }
+
+            const build_run_url = `https://github.com/joelucid/FluxDTU/actions/runs/${context.runId}`;
+
+            body += `\n\n### Notice\n`
+              + `* These artifacts are ZIP files containing the factory update binary as well as the OTA update binary.\n`
+              + `  Extract the binaries from the ZIP files first. Do not use the ZIP files themselves to perform an update.\n`
+              + `* These links point to artifacts of the latest [**successful** build run](${build_run_url}).\n`
+              + `* The linked artifacts were built from ${context.sha}.`;
+            core.setOutput("message", body);
+
+      - name: Save output and PR number
+        shell: bash
+        run: |
+          mkdir -p ./pr
+          echo "${{ steps.generate_pr_artifacts_comment.outputs.message }}" > ./pr/${{ github.event.number }}.md
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: pr
+          path: pr/
+          retention-days: 1
+          overwrite: true
+
+  release:
+    name: Create Release
+    runs-on: ubuntu-24.04
+    permissions:
+      actions: read
+      pull-requests: read
+      contents: write
+    needs: [get_default_envs, build]
+    if: startsWith(github.ref, 'refs/tags/2')
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Get openDTU core tags
+        run: git fetch --force --tags https://github.com/tbnobody/OpenDTU.git
+
+      - name: Get openDTU core release
+        run: |
+          echo "OPEN_DTU_CORE_RELEASE=$(git for-each-ref --sort=creatordate --format '%(refname) %(creatordate)' refs/tags | grep 'refs/tags/v' | tail -1 | sed 's#.*/##' | sed 's/ .*//')" >> $GITHUB_ENV
+
+      - name: Create openDTU-core-release-Badge
+        if: vars.BADGE_GIST_ID != ''
+        uses: schneegans/dynamic-badges-action@0e50b8bad39e7e1afd3e4e9c2b7dd145fad07501 # version 1.8.0
+        with:
+          auth: ${{ secrets.GIST_SECRET }}
+          gistID: ${{ vars.BADGE_GIST_ID }}
+          filename: openDTUcoreRelease.json
+          label: based on upstream OpenDTU
+          message: ${{ env.OPEN_DTU_CORE_RELEASE }}
+          color: lightblue
+
+      - name: Build Changelog
+        id: github_release
+        uses: mikepenz/release-changelog-builder-action@v6.2.1
+        with:
+          failOnError: true
+          commitMode: true
+          configuration: ".github/workflows/config/release-notes-config.json"
+
+      - uses: actions/download-artifact@v8
+        with:
+          path: artifacts/
+
+      - name: Move artifacts to the expected location
+        run: |
+          ls -lR artifacts/
+          mkdir -p release-artifacts
+          for i in artifacts/*/; do
+            for file in ${i}fluxdtu-*.bin; do
+              # only process if the file actually exists
+              # (is not just a pattern that failed expansion)
+              if [ -f "$file" ]; then
+                filename=$(basename "${file}")
+                tag_name=${GITHUB_REF#refs/tags/}
+                # remove prefix "fluxdtu-" from the filename
+                new_filename="${filename#fluxdtu-}"
+                # insert the Git tag name after the common prefix
+                new_filename="fluxdtu-${tag_name}-${new_filename}"
+                cp -v "${file}" "release-artifacts/${new_filename}"
+              fi
+            done
+          done
+          ls -lR release-artifacts/
+
+      - name: Create release
+        uses: softprops/action-gh-release@v3
+        with:
+          body: ${{steps.github_release.outputs.changelog}}
+          draft: False
+          files: |
+            release-artifacts/*.bin

@@ -1,0 +1,12 @@
+FluxDTU - ESP32 firmware to control Hoymiles inverters and peripherals
+
+Copyright (C) 2022 Thomas Basler and others
+
+FluxDTU is provided under:
+
+    SPDX-License-Identifier: GPL-2.0-or-later
+
+Being under the terms of the GNU General Public License version 2
+or any later version, according with:
+
+    LICENSE

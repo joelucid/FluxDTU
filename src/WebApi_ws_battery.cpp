@@ -1,0 +1,144 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
+/*
+ * Copyright (C) 2022-2024 Thomas Basler and others
+ */
+#include "WebApi_ws_battery.h"
+#include "AsyncJson.h"
+#include "Configuration.h"
+#include <battery/Controller.h>
+#include <battery/Stats.h>
+#include "WebApi.h"
+#include "defaults.h"
+#include "Utils.h"
+
+#undef TAG
+static const char* TAG = "webapi";
+
+WebApiWsBatteryLiveClass::WebApiWsBatteryLiveClass()
+    : _ws("/batterylivedata")
+{
+}
+
+void WebApiWsBatteryLiveClass::init(AsyncWebServer& server, Scheduler& scheduler)
+{
+    using std::placeholders::_1;
+    using std::placeholders::_2;
+    using std::placeholders::_3;
+    using std::placeholders::_4;
+    using std::placeholders::_5;
+    using std::placeholders::_6;
+
+    _server = &server;
+    _server->on("/api/batterylivedata/status", HTTP_GET, static_cast<ArRequestHandlerFunction>(std::bind(&WebApiWsBatteryLiveClass::onLivedataStatus, this, _1)));
+
+    _server->addHandler(&_ws);
+    _ws.onEvent(std::bind(&WebApiWsBatteryLiveClass::onWebsocketEvent, this, _1, _2, _3, _4, _5, _6));
+
+    scheduler.addTask(_wsCleanupTask);
+    _wsCleanupTask.setCallback(std::bind(&WebApiWsBatteryLiveClass::wsCleanupTaskCb, this));
+    _wsCleanupTask.setIterations(TASK_FOREVER);
+    _wsCleanupTask.setInterval(1 * TASK_SECOND);
+    _wsCleanupTask.enable();
+
+    scheduler.addTask(_sendDataTask);
+    _sendDataTask.setCallback(std::bind(&WebApiWsBatteryLiveClass::sendDataTaskCb, this));
+    _sendDataTask.setIterations(TASK_FOREVER);
+    _sendDataTask.setInterval(1 * TASK_SECOND);
+    _sendDataTask.enable();
+
+    _simpleDigestAuth.setUsername(AUTH_USERNAME);
+    _simpleDigestAuth.setRealm("battery websocket");
+    _simpleDigestAuth.setAuthType(AsyncAuthType::AUTH_DIGEST);
+
+    reload();
+}
+
+void WebApiWsBatteryLiveClass::reload()
+{
+    _ws.removeMiddleware(&_simpleDigestAuth);
+
+    auto const& config = Configuration.get();
+
+    if (config.Security.AllowReadonly) { return; }
+
+    _ws.enable(false);
+    _simpleDigestAuth.setPassword(config.Security.Password);
+    _ws.addMiddleware(&_simpleDigestAuth);
+    _ws.closeAll();
+    _ws.enable(true);
+}
+
+void WebApiWsBatteryLiveClass::wsCleanupTaskCb()
+{
+    // see: https://github.com/me-no-dev/ESPAsyncWebServer#limiting-the-number-of-web-socket-clients
+     _ws.cleanupClients();
+}
+
+void WebApiWsBatteryLiveClass::sendDataTaskCb()
+{
+    // do nothing if no WS client is connected
+    if (_ws.count() == 0) {
+        return;
+    }
+
+    if (!Battery.getStats()->updateAvailable(_lastUpdateCheck)) { return; }
+    _lastUpdateCheck = millis();
+
+    try {
+        std::lock_guard<std::mutex> lock(_mutex);
+        JsonDocument root;
+        JsonVariant var = root;
+
+        generateCommonJsonResponse(var);
+
+        if (Utils::checkJsonAlloc(root, __FUNCTION__, __LINE__)) {
+
+            // battery provider does not generate a card, e.g., MQTT provider
+            if (root.isNull()) { return; }
+
+            String buffer;
+            serializeJson(root, buffer);
+
+            _ws.textAll(buffer);
+        }
+    } catch (std::bad_alloc& bad_alloc) {
+        ESP_LOGE(TAG, "Calling /api/batterylivedata/status has temporarily run out of resources. Reason: \"%s\".", bad_alloc.what());
+    } catch (const std::exception& exc) {
+        ESP_LOGE(TAG, "Unknown exception in /api/batterylivedata/status. Reason: \"%s\".", exc.what());
+    }
+}
+
+void WebApiWsBatteryLiveClass::generateCommonJsonResponse(JsonVariant& root)
+{
+    Battery.getStats()->getLiveViewData(root);
+}
+
+void WebApiWsBatteryLiveClass::onWebsocketEvent(AsyncWebSocket* server, AsyncWebSocketClient* client, AwsEventType type, void* arg, uint8_t* data, size_t len)
+{
+    if (type == WS_EVT_CONNECT) {
+        ESP_LOGD(TAG, "Websocket: [%s][%u] connect", server->url(), client->id());
+    } else if (type == WS_EVT_DISCONNECT) {
+        ESP_LOGD(TAG, "Websocket: [%s][%u] disconnect", server->url(), client->id());
+    }
+}
+
+void WebApiWsBatteryLiveClass::onLivedataStatus(AsyncWebServerRequest* request)
+{
+    if (!WebApi.checkCredentialsReadonly(request)) {
+        return;
+    }
+    try {
+        std::lock_guard<std::mutex> lock(_mutex);
+        AsyncJsonResponse* response = new AsyncJsonResponse();
+        auto& root = response->getRoot();
+        generateCommonJsonResponse(root);
+
+        WebApi.sendJsonResponse(request, response, __FUNCTION__, __LINE__);
+    } catch (std::bad_alloc& bad_alloc) {
+        ESP_LOGE(TAG, "Calling /api/batterylivedata/status has temporarily run out of resources. Reason: \"%s\".", bad_alloc.what());
+        WebApi.sendTooManyRequests(request);
+    } catch (const std::exception& exc) {
+        ESP_LOGE(TAG, "Unknown exception in /api/batterylivedata/status. Reason: \"%s\".", exc.what());
+        WebApi.sendTooManyRequests(request);
+    }
+}

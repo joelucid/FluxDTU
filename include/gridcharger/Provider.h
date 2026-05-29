@@ -1,0 +1,33 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
+#pragma once
+
+#include <gridcharger/Stats.h>
+#include <cstdint>
+#include <optional>
+
+namespace GridChargers {
+
+class Provider {
+public:
+    virtual ~Provider() = default;
+    virtual bool init() = 0;
+    virtual void deinit() = 0;
+    virtual void loop() = 0;
+
+    virtual std::shared_ptr<Stats> getStats() const = 0;
+    virtual bool getAutoPowerStatus() const = 0;
+    virtual int16_t getAutoPowerTargetPowerConsumption() const = 0;
+    virtual bool isAutoPowerTargetPowerConsumptionZeroHoldActive() const = 0;
+    virtual bool isAutoPowerLimitedByAvailablePower() const = 0;
+
+    virtual bool supportsPowerLimiterControl() const { return false; }
+    virtual std::optional<uint32_t> getPowerLimiterOutputReferenceMillis() const { return 0; }
+    virtual uint16_t getPowerLimiterCurrentInputPowerWatts() const { return 0; }
+    virtual uint16_t getPowerLimiterExpectedInputPowerWatts() const { return 0; }
+    virtual uint16_t getPowerLimiterMaxInputPowerWatts() const { return 0; }
+    virtual uint16_t applyPowerLimiterInputPowerIncrease(uint16_t) { return 0; }
+    virtual uint16_t applyPowerLimiterInputPowerReduction(uint16_t) { return 0; }
+    virtual void setPowerLimiterLimitedByAvailablePower(bool) { }
+};
+
+} // namespace GridChargers
