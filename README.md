@@ -60,6 +60,12 @@ being tuned.
 The statistics view combines daily energy totals with tabbed charts for power
 history, loads, panels, battery behavior, temperatures, and boost operation.
 
+![FluxDTU loads statistics view showing flexible load categories](docs/images/flexible-load-statistics-example.png)
+
+The loads tab demonstrates flexible-load statistics by splitting measured load
+power into configured categories while keeping the daily measured-load total
+visible alongside the rest of the energy balance.
+
 ## Project State
 
 FluxDTU is maintained as an experimental public fork. It is used on a real
