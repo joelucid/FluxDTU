@@ -21,7 +21,7 @@ void sendOperationResult(
     retMsg["code"] = success ? WebApiError::GenericSuccess : WebApiError::GenericValueMissing;
     WebApi.sendJsonResponse(request, response, __FUNCTION__, __LINE__);
 }
-}
+}  // namespace
 
 void WebApiOperationProfilesClass::init(AsyncWebServer& server, Scheduler& scheduler)
 {

@@ -254,7 +254,7 @@ uint32_t nextLocalDayStart(uint32_t dayStart)
     timeinfo.tm_min = 0;
     timeinfo.tm_sec = 0;
     return static_cast<uint32_t>(mktime(&timeinfo));
-}
+}  // namespace
 
 uint32_t addLocalDays(uint32_t dayStart, uint16_t days)
 {
@@ -640,7 +640,7 @@ String serialString(uint64_t serial)
     return String(serialBuffer);
 }
 
-}
+}  // namespace
 
 StatisticsClass Statistics;
 
@@ -796,7 +796,7 @@ StatisticsClass::Sample StatisticsClass::collectInstantaneousSample() const
     }
 
     if (config.PowerLimiter.Enabled && PowerLimiter.usesBatteryPoweredInverter()) {
-        sample.targetPowerWatts = PowerLimiter.getBatteryTargetPowerConsumption();
+        sample.targetPowerWatts = clampInt16(PowerLimiter.getBatteryTargetPowerConsumption());
         sample.flags |= HasTargetPower;
     }
 

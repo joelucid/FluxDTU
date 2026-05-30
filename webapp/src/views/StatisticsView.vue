@@ -43,7 +43,7 @@
                         :min="rangeStartMinDate"
                         :max="rangeStartMaxDate"
                         @change="setRangeStartFromInput"
-                    >
+                    />
                 </div>
                 <button
                     type="button"
@@ -127,7 +127,11 @@
                     aria-labelledby="statistics-panels-tab"
                 >
                     <div class="panel-chart-controls">
-                        <div class="btn-group btn-group-sm panel-mode-toggle" role="group" :aria-label="$t('statistics.Panels')">
+                        <div
+                            class="btn-group btn-group-sm panel-mode-toggle"
+                            role="group"
+                            :aria-label="$t('statistics.Panels')"
+                        >
                             <input
                                 id="statistics-panel-mode-inverters"
                                 v-model="panelDisplayMode"
@@ -136,7 +140,7 @@
                                 value="inverters"
                                 autocomplete="off"
                                 @change="renderActiveChart"
-                            >
+                            />
                             <label class="btn btn-outline-primary" for="statistics-panel-mode-inverters">
                                 {{ $t('statistics.PanelModeInverters') }}
                             </label>
@@ -148,7 +152,7 @@
                                 value="strings"
                                 autocomplete="off"
                                 @change="renderActiveChart"
-                            >
+                            />
                             <label class="btn btn-outline-primary" for="statistics-panel-mode-strings">
                                 {{ $t('statistics.PanelModeStrings') }}
                             </label>
@@ -163,7 +167,7 @@
                                     :value="option.value"
                                     autocomplete="off"
                                     @change="onPanelSelectionChanged"
-                                >
+                                />
                                 <label
                                     class="btn btn-sm btn-outline-secondary panel-inverter-toggle"
                                     :for="`statistics-panel-inverter-${option.value}`"
@@ -375,7 +379,9 @@ const statisticsRangeDragPlugin: Plugin = {
         clippedCharts.add(chart);
     },
     afterDatasetsDraw(chart) {
-        if (!clippedCharts.has(chart)) { return; }
+        if (!clippedCharts.has(chart)) {
+            return;
+        }
 
         chart.ctx.restore();
         clippedCharts.delete(chart);
@@ -547,9 +553,15 @@ export default defineComponent({
             return this.selectedPeriod === '30d' || this.selectedPeriod === '365d';
         },
         periodDurationSeconds(): number {
-            if (this.selectedPeriod === '7d') { return 7 * 24 * 60 * 60; }
-            if (this.selectedPeriod === '30d') { return 30 * 24 * 60 * 60; }
-            if (this.selectedPeriod === '365d') { return 365 * 24 * 60 * 60; }
+            if (this.selectedPeriod === '7d') {
+                return 7 * 24 * 60 * 60;
+            }
+            if (this.selectedPeriod === '30d') {
+                return 30 * 24 * 60 * 60;
+            }
+            if (this.selectedPeriod === '365d') {
+                return 365 * 24 * 60 * 60;
+            }
             return 24 * 60 * 60;
         },
         rangeStartMinDate(): string | undefined {
@@ -562,16 +574,16 @@ export default defineComponent({
             return this.customRangeStart === null || this.customRangeStart >= this.latestSelectableRangeStart();
         },
         visibleRangeLabel(): string {
-            if (!this.status) { return ''; }
+            if (!this.status) {
+                return '';
+            }
             return `${this.formatTooltipTime(this.status.from)} - ${this.formatTooltipTime(this.status.to)}`;
         },
         chartTitle(): string {
             return this.isDailyPeriod ? this.$t('statistics.DailyEnergy') : this.$t('statistics.PowerHistory');
         },
         chartTabs(): ChartTabOption[] {
-            const tabs: ChartTabOption[] = [
-                { value: 'flow', label: this.chartTitle },
-            ];
+            const tabs: ChartTabOption[] = [{ value: 'flow', label: this.chartTitle }];
             if (this.hasLoadData) {
                 tabs.push({ value: 'loads', label: this.$t('statistics.Loads') });
             }
@@ -589,10 +601,14 @@ export default defineComponent({
             return this.status?.samples || [];
         },
         plotSamples(): StatisticsSample[] {
-            if (this.isDailyPeriod) { return this.samples; }
+            if (this.isDailyPeriod) {
+                return this.samples;
+            }
 
             const status = this.status;
-            if (!status) { return []; }
+            if (!status) {
+                return [];
+            }
 
             const byTimestamp = new Map<number, StatisticsSample>();
             const minTimestamp = Math.max(0, status.from - this.rangeBufferSpanSeconds());
@@ -600,27 +616,35 @@ export default defineComponent({
 
             const addSamples = (candidate: StatisticsStatus, includeVisibleRange: boolean) => {
                 (candidate.samples || []).forEach((sample) => {
-                    if (sample.t < minTimestamp || sample.t > maxTimestamp) { return; }
-                    if (!includeVisibleRange && sample.t >= status.from && sample.t <= status.to) { return; }
+                    if (sample.t < minTimestamp || sample.t > maxTimestamp) {
+                        return;
+                    }
+                    if (!includeVisibleRange && sample.t >= status.from && sample.t <= status.to) {
+                        return;
+                    }
                     byTimestamp.set(sample.t, sample);
                 });
             };
 
             addSamples(status, true);
             this.plotStatuses().forEach((candidate) => {
-                if (candidate === status) { return; }
+                if (candidate === status) {
+                    return;
+                }
                 addSamples(candidate, false);
             });
 
             return Array.from(byTimestamp.values()).sort((a, b) => a.t - b.t);
         },
         temperatureSamples(): StatisticsSample[] {
-            return this.samples.filter((sample) =>
-                sample.inverter_temperatures && Object.keys(sample.inverter_temperatures).length > 0);
+            return this.samples.filter(
+                (sample) => sample.inverter_temperatures && Object.keys(sample.inverter_temperatures).length > 0
+            );
         },
         plotTemperatureSamples(): StatisticsSample[] {
-            return this.plotSamples.filter((sample) =>
-                sample.inverter_temperatures && Object.keys(sample.inverter_temperatures).length > 0);
+            return this.plotSamples.filter(
+                (sample) => sample.inverter_temperatures && Object.keys(sample.inverter_temperatures).length > 0
+            );
         },
         days(): StatisticsDay[] {
             return this.status?.days || [];
@@ -639,7 +663,9 @@ export default defineComponent({
             const seen = new Set<string>();
             this.panels.forEach((panel) => {
                 const value = String(panel.inverter_index);
-                if (seen.has(value)) { return; }
+                if (seen.has(value)) {
+                    return;
+                }
                 seen.add(value);
                 options.push({ value, label: panel.inverter || panel.serial });
             });
@@ -672,8 +698,8 @@ export default defineComponent({
                     return {
                         key: `panel-${panel.index}`,
                         label: showInverterName
-                            ? (panel.label || `${panel.inverter || panel.serial} / ${fallbackLabel}`)
-                            : (panel.name || fallbackLabel),
+                            ? panel.label || `${panel.inverter || panel.serial} / ${fallbackLabel}`
+                            : panel.name || fallbackLabel,
                         positions: [position],
                     };
                 });
@@ -682,25 +708,30 @@ export default defineComponent({
             return this.panels.length > 0;
         },
         hasLoadData(): boolean {
-            return this.loadPoints.some((point) =>
-                point.other > 0 || point.flexibleValues.some((value) => value > 0));
+            return this.loadPoints.some((point) => point.other > 0 || point.flexibleValues.some((value) => value > 0));
         },
         hasTemperatureData(): boolean {
             return !this.isDailyPeriod && this.inverters.length > 0;
         },
         summaryConsumptionWh(): number {
             const summary = this.summary;
-            if (!summary) { return 0; }
-            return summary.solar_energy_wh
-                + summary.battery_discharge_wh
-                - summary.grid_charger_energy_wh
-                + summary.grid_import_wh
-                - summary.grid_export_wh;
+            if (!summary) {
+                return 0;
+            }
+            return (
+                summary.solar_energy_wh +
+                summary.battery_discharge_wh -
+                summary.grid_charger_energy_wh +
+                summary.grid_import_wh -
+                summary.grid_export_wh
+            );
         },
         selfGeneratedConsumptionPercent(): number | undefined {
             const summary = this.summary;
             const consumption = this.summaryConsumptionWh;
-            if (!summary || consumption <= 0) { return undefined; }
+            if (!summary || consumption <= 0) {
+                return undefined;
+            }
 
             const selfGeneratedWh = Math.max(0, consumption - Math.max(0, summary.grid_import_wh));
             return Math.min(100, (selfGeneratedWh / consumption) * 100);
@@ -712,42 +743,59 @@ export default defineComponent({
             const batteryBalance = (summary?.battery_discharge_wh || 0) - (summary?.grid_charger_energy_wh || 0);
             return [
                 { label: this.$t('statistics.Consumption'), value: this.formatWh(consumption) },
-                { label: this.$t('statistics.SelfGeneratedConsumption'), value: this.formatOptionalPercent(this.selfGeneratedConsumptionPercent) },
+                {
+                    label: this.$t('statistics.SelfGeneratedConsumption'),
+                    value: this.formatOptionalPercent(this.selfGeneratedConsumptionPercent),
+                },
                 { label: this.$t('statistics.SolarEnergy'), value: this.formatWh(summary?.solar_energy_wh || 0) },
                 { label: this.$t('statistics.GridImport'), value: this.formatWh(summary?.grid_import_wh || 0) },
                 { label: this.$t('statistics.GridBalance'), value: this.formatSignedWh(gridBalance) },
                 { label: this.$t('statistics.BatteryBalance'), value: this.formatSignedWh(batteryBalance) },
-                { label: this.$t('statistics.GridCharger'), value: this.formatWh(summary?.grid_charger_energy_wh || 0) },
-                { label: this.$t('statistics.FlexibleLoadEnergy'), value: this.formatWh(summary?.flexible_load_energy_wh || 0) },
+                {
+                    label: this.$t('statistics.GridCharger'),
+                    value: this.formatWh(summary?.grid_charger_energy_wh || 0),
+                },
+                {
+                    label: this.$t('statistics.FlexibleLoadEnergy'),
+                    value: this.formatWh(summary?.flexible_load_energy_wh || 0),
+                },
             ];
         },
         flowPoints(): FlowStackPoint[] {
             if (this.isDailyPeriod) {
-                return this.days.map((day) => this.createEnergyStackPoint(
-                    day.t,
-                    day.solar_energy_wh,
-                    day.battery_discharge_wh,
-                    day.grid_import_wh,
-                    day.grid_export_wh,
-                    day.grid_charger_energy_wh
-                ));
+                return this.days.map((day) =>
+                    this.createEnergyStackPoint(
+                        day.t,
+                        day.solar_energy_wh,
+                        day.battery_discharge_wh,
+                        day.grid_import_wh,
+                        day.grid_export_wh,
+                        day.grid_charger_energy_wh
+                    )
+                );
             }
 
             const samples = this.samples.slice();
             while (samples.length > 0) {
                 const lastSample = samples[samples.length - 1];
-                if (!lastSample || !this.isEmptyPowerSample(lastSample)) { break; }
+                if (!lastSample || !this.isEmptyPowerSample(lastSample)) {
+                    break;
+                }
                 samples.pop();
             }
             return samples.map((sample) => this.createPowerStackPoint(sample));
         },
         plotFlowPoints(): FlowStackPoint[] {
-            if (this.isDailyPeriod) { return this.flowPoints; }
+            if (this.isDailyPeriod) {
+                return this.flowPoints;
+            }
 
             const samples = this.plotSamples.slice();
             while (samples.length > 0) {
                 const lastSample = samples[samples.length - 1];
-                if (!lastSample || !this.isEmptyPowerSample(lastSample)) { break; }
+                if (!lastSample || !this.isEmptyPowerSample(lastSample)) {
+                    break;
+                }
                 samples.pop();
             }
             return samples.map((sample) => this.createPowerStackPoint(sample));
@@ -756,14 +804,17 @@ export default defineComponent({
             if (this.isDailyPeriod) {
                 return this.days.map((day) => {
                     const flexibleValues = day.flexible_load_energies_wh || [];
-                    const totalLoad = Math.max(0, this.createEnergyStackPoint(
-                        day.t,
-                        day.solar_energy_wh,
-                        day.battery_discharge_wh,
-                        day.grid_import_wh,
-                        day.grid_export_wh,
-                        day.grid_charger_energy_wh
-                    ).consumption);
+                    const totalLoad = Math.max(
+                        0,
+                        this.createEnergyStackPoint(
+                            day.t,
+                            day.solar_energy_wh,
+                            day.battery_discharge_wh,
+                            day.grid_import_wh,
+                            day.grid_export_wh,
+                            day.grid_charger_energy_wh
+                        ).consumption
+                    );
                     const flexibleLoadEnergy = this.measuredLoadTotal(day.flexible_load_energy_wh, flexibleValues);
                     return {
                         t: day.t,
@@ -785,7 +836,9 @@ export default defineComponent({
             });
         },
         plotLoadPoints(): LoadPoint[] {
-            if (this.isDailyPeriod) { return this.loadPoints; }
+            if (this.isDailyPeriod) {
+                return this.loadPoints;
+            }
 
             return this.plotSamples.map((sample) => {
                 const flexibleValues = sample.flexible_load_powers_w || [];
@@ -801,18 +854,20 @@ export default defineComponent({
         panelPoints(): PanelPoint[] {
             const points = this.isDailyPeriod
                 ? this.days.map((day) => ({
-                    t: day.t,
-                    values: day.panel_energies_wh || [],
-                }))
+                      t: day.t,
+                      values: day.panel_energies_wh || [],
+                  }))
                 : this.samples.map((sample) => ({
-                    t: sample.t,
-                    values: sample.panel_powers_w || [],
-                }));
+                      t: sample.t,
+                      values: sample.panel_powers_w || [],
+                  }));
 
             return points.filter((point) => this.hasPanelPointValue(point));
         },
         plotPanelPoints(): PanelPoint[] {
-            if (this.isDailyPeriod) { return this.panelPoints; }
+            if (this.isDailyPeriod) {
+                return this.panelPoints;
+            }
 
             return this.plotSamples
                 .map((sample) => ({
@@ -823,33 +878,41 @@ export default defineComponent({
         },
         boostPoints(): BoostPoint[] {
             if (this.isDailyPeriod) {
-                return this.days.map((day) => this.createBoostPoint(
-                    day.t,
-                    day.grid_import_wh,
-                    day.battery_boost_savings_25a_wh || 0,
-                    day.battery_boost_savings_50a_wh || 0,
-                    day.battery_boost_relax_limited_wh || 0
-                ));
+                return this.days.map((day) =>
+                    this.createBoostPoint(
+                        day.t,
+                        day.grid_import_wh,
+                        day.battery_boost_savings_25a_wh || 0,
+                        day.battery_boost_savings_50a_wh || 0,
+                        day.battery_boost_relax_limited_wh || 0
+                    )
+                );
             }
 
-            return this.samples.map((sample) => this.createBoostPoint(
-                sample.t,
-                sample.grid_import_power_w ?? Math.max(0, sample.grid_power_w),
-                sample.battery_boost_savings_25a_power_w || 0,
-                sample.battery_boost_savings_50a_power_w || 0,
-                sample.battery_boost_relax_limited_power_w || 0
-            ));
+            return this.samples.map((sample) =>
+                this.createBoostPoint(
+                    sample.t,
+                    sample.grid_import_power_w ?? Math.max(0, sample.grid_power_w),
+                    sample.battery_boost_savings_25a_power_w || 0,
+                    sample.battery_boost_savings_50a_power_w || 0,
+                    sample.battery_boost_relax_limited_power_w || 0
+                )
+            );
         },
         plotBoostPoints(): BoostPoint[] {
-            if (this.isDailyPeriod) { return this.boostPoints; }
+            if (this.isDailyPeriod) {
+                return this.boostPoints;
+            }
 
-            return this.plotSamples.map((sample) => this.createBoostPoint(
-                sample.t,
-                sample.grid_import_power_w ?? Math.max(0, sample.grid_power_w),
-                sample.battery_boost_savings_25a_power_w || 0,
-                sample.battery_boost_savings_50a_power_w || 0,
-                sample.battery_boost_relax_limited_power_w || 0
-            ));
+            return this.plotSamples.map((sample) =>
+                this.createBoostPoint(
+                    sample.t,
+                    sample.grid_import_power_w ?? Math.max(0, sample.grid_power_w),
+                    sample.battery_boost_savings_25a_power_w || 0,
+                    sample.battery_boost_savings_50a_power_w || 0,
+                    sample.battery_boost_relax_limited_power_w || 0
+                )
+            );
         },
     },
     methods: {
@@ -869,21 +932,23 @@ export default defineComponent({
         },
         plotStatuses(): StatisticsStatus[] {
             const status = this.status;
-            if (!status) { return []; }
+            if (!status) {
+                return [];
+            }
 
             const period = this.selectedPeriod;
             const view = this.selectedChartTab;
             const span = this.rangeBufferSpanSeconds();
-            const starts = [
-                status.from - span,
-                status.from,
-                status.from + span,
-            ].map((start) => this.clampRangeStart(start, false));
+            const starts = [status.from - span, status.from, status.from + span].map((start) =>
+                this.clampRangeStart(start, false)
+            );
 
             const seen = new Set<number>();
             return starts
                 .filter((start) => {
-                    if (seen.has(start)) { return false; }
+                    if (seen.has(start)) {
+                        return false;
+                    }
                     seen.add(start);
                     return true;
                 })
@@ -892,22 +957,35 @@ export default defineComponent({
         },
         categoryViewportScale(points: { t: number }[]): Record<string, number> {
             const status = this.status;
-            if (this.isDailyPeriod || !status || points.length === 0) { return {}; }
+            if (this.isDailyPeriod || !status || points.length === 0) {
+                return {};
+            }
 
             let min = points.findIndex((point) => point.t >= status.from);
-            if (min < 0) { min = 0; }
+            if (min < 0) {
+                min = 0;
+            }
 
             let max = min;
             for (let i = min; i < points.length; ++i) {
                 const point = points[i];
-                if (!point || point.t > status.to) { break; }
+                if (!point || point.t > status.to) {
+                    break;
+                }
                 max = i;
             }
-            if (max < min) { max = min; }
+            if (max < min) {
+                max = min;
+            }
 
             return { min, max };
         },
-        fetchStatisticsStatus(period: string, rangeStart: number | null, view: ChartTab, useCache = true): Promise<StatisticsStatus> {
+        fetchStatisticsStatus(
+            period: string,
+            rangeStart: number | null,
+            view: ChartTab,
+            useCache = true
+        ): Promise<StatisticsStatus> {
             const cacheKey = this.statisticsCacheKey(period, rangeStart, view);
             const cached = useCache ? this.statusCache[cacheKey] : undefined;
             if (cached) {
@@ -936,8 +1014,12 @@ export default defineComponent({
                 });
             this.pendingStatusRequests[cacheKey] = request;
             request.then(
-                () => { delete this.pendingStatusRequests[cacheKey]; },
-                () => { delete this.pendingStatusRequests[cacheKey]; }
+                () => {
+                    delete this.pendingStatusRequests[cacheKey];
+                },
+                () => {
+                    delete this.pendingStatusRequests[cacheKey];
+                }
             );
             return request;
         },
@@ -969,7 +1051,13 @@ export default defineComponent({
 
             this.fetchStatisticsStatus(period, rangeStart, view, options.useCache ?? true)
                 .then((status) => {
-                    if (token !== this.requestSerial || period !== this.selectedPeriod || view !== this.selectedChartTab) { return; }
+                    if (
+                        token !== this.requestSerial ||
+                        period !== this.selectedPeriod ||
+                        view !== this.selectedChartTab
+                    ) {
+                        return;
+                    }
                     this.applyStatus(status, rangeStart);
                 })
                 .catch(() => {
@@ -989,7 +1077,9 @@ export default defineComponent({
 
             const fields = data.sample_fields;
             data.samples = data.samples.map((sample) => {
-                if (!Array.isArray(sample)) { return sample; }
+                if (!Array.isArray(sample)) {
+                    return sample;
+                }
 
                 const normalized = {} as Record<string, unknown>;
                 fields.forEach((field, index) => {
@@ -1020,7 +1110,9 @@ export default defineComponent({
         },
         setRangeStartFromInput() {
             const timestamp = this.timestampFromDateInput(this.rangeStartInput);
-            if (timestamp === null) { return; }
+            if (timestamp === null) {
+                return;
+            }
 
             this.customRangeStart = this.clampRangeStart(timestamp);
             this.rangeStartInput = this.dateInputFromTimestamp(this.customRangeStart);
@@ -1036,7 +1128,9 @@ export default defineComponent({
         shiftRangeBySeconds(seconds: number, interactive = false) {
             const currentStart = this.status?.from ?? this.customRangeStart ?? this.latestSelectableRangeStart();
             const nextStart = this.clampRangeStart(currentStart + seconds);
-            if (nextStart === currentStart && this.customRangeStart !== null) { return; }
+            if (nextStart === currentStart && this.customRangeStart !== null) {
+                return;
+            }
 
             this.loadRangeStart(nextStart, !interactive);
         },
@@ -1057,7 +1151,9 @@ export default defineComponent({
             this.getData({ rangeStart: nextStart, showLoading });
         },
         startRangeDrag(event: PointerEvent) {
-            if (!this.status || (event.pointerType === 'mouse' && event.button !== 0)) { return; }
+            if (!this.status || (event.pointerType === 'mouse' && event.button !== 0)) {
+                return;
+            }
 
             const target = event.currentTarget as HTMLElement;
             this.setRangeDragCursor(true, target);
@@ -1076,7 +1172,7 @@ export default defineComponent({
             this.rangeDragSession++;
             try {
                 target.setPointerCapture(event.pointerId);
-            } catch {
+            } catch (_) {
                 // Pointer capture is best-effort; window listeners below still finish the drag.
             }
             window.addEventListener('pointermove', this.moveRangeDrag, true);
@@ -1091,7 +1187,9 @@ export default defineComponent({
             event.preventDefault();
         },
         moveRangeDrag(event: PointerEvent) {
-            if (this.rangeDragEnding || !this.rangeDrag.active || this.rangeDrag.pointerId !== event.pointerId) { return; }
+            if (this.rangeDragEnding || !this.rangeDrag.active || this.rangeDrag.pointerId !== event.pointerId) {
+                return;
+            }
 
             this.rangeDrag.currentX = event.clientX;
             this.rangeDragLastMoveAt = performance.now();
@@ -1100,13 +1198,17 @@ export default defineComponent({
             event.preventDefault();
         },
         endRangeDrag(event: PointerEvent) {
-            if (this.rangeDragEnding || !this.rangeDrag.active || this.rangeDrag.pointerId !== event.pointerId) { return; }
+            if (this.rangeDragEnding || !this.rangeDrag.active || this.rangeDrag.pointerId !== event.pointerId) {
+                return;
+            }
 
             this.finishRangeDrag(event.clientX);
             event.preventDefault();
         },
         endRangeDragMouseFallback(event: MouseEvent) {
-            if (this.rangeDragEnding || !this.rangeDrag.active || this.rangeDrag.pointerId === null) { return; }
+            if (this.rangeDragEnding || !this.rangeDrag.active || this.rangeDrag.pointerId === null) {
+                return;
+            }
 
             this.finishRangeDrag(event.clientX);
             event.preventDefault();
@@ -1126,16 +1228,22 @@ export default defineComponent({
         },
         applyRangeDrag(clientX: number) {
             const deltaX = clientX - this.rangeDrag.startX;
-            if (this.rangeDrag.width <= 0) { return; }
+            if (this.rangeDrag.width <= 0) {
+                return;
+            }
 
-            const rawShiftSeconds = -deltaX / this.rangeDrag.width * this.periodDurationSeconds;
+            const rawShiftSeconds = (-deltaX / this.rangeDrag.width) * this.periodDurationSeconds;
             const nextStart = this.clampRangeStart(this.rangeDrag.baseStart + rawShiftSeconds, false);
-            if (nextStart === this.rangeDrag.lastAppliedStart) { return; }
+            if (nextStart === this.rangeDrag.lastAppliedStart) {
+                return;
+            }
 
             this.rangeDrag.lastAppliedStart = nextStart;
             this.customRangeStart = nextStart;
             this.rangeStartInput = this.dateInputFromTimestamp(nextStart);
-            if (this.rangeDragEnding) { return; }
+            if (this.rangeDragEnding) {
+                return;
+            }
 
             this.scheduleAdjacentRangePrefetch(40);
 
@@ -1149,9 +1257,13 @@ export default defineComponent({
             this.queueRangeDragFetch();
         },
         queueRangeDragFetch() {
-            if (this.rangeDrag.lastAppliedStart === null) { return; }
+            if (this.rangeDrag.lastAppliedStart === null) {
+                return;
+            }
             this.rangeDragQueuedStart = this.rangeDrag.lastAppliedStart;
-            if (this.rangeDragFetchTimer !== null || this.rangeDragFetchInFlight) { return; }
+            if (this.rangeDragFetchTimer !== null || this.rangeDragFetchInFlight) {
+                return;
+            }
 
             this.rangeDragFetchTimer = window.setTimeout(() => {
                 this.rangeDragFetchTimer = null;
@@ -1159,7 +1271,9 @@ export default defineComponent({
             }, 80);
         },
         flushRangeDragFetch() {
-            if (!this.rangeDrag.active || this.rangeDragQueuedStart === null || this.rangeDragFetchInFlight) { return; }
+            if (!this.rangeDrag.active || this.rangeDragQueuedStart === null || this.rangeDragFetchInFlight) {
+                return;
+            }
 
             const period = this.selectedPeriod;
             const view = this.selectedChartTab;
@@ -1177,17 +1291,21 @@ export default defineComponent({
             this.rangeDragFetchInFlight = true;
             this.fetchStatisticsStatus(period, start, view, true)
                 .then((status) => {
-                    if (session !== this.rangeDragSession
-                            || !this.rangeDrag.active
-                            || period !== this.selectedPeriod
-                            || view !== this.selectedChartTab) {
+                    if (
+                        session !== this.rangeDragSession ||
+                        !this.rangeDrag.active ||
+                        period !== this.selectedPeriod ||
+                        view !== this.selectedChartTab
+                    ) {
                         return;
                     }
                     this.queueRangeDragStatusApply(status, start);
                 })
                 .catch(() => undefined)
                 .then(() => {
-                    if (session !== this.rangeDragSession) { return; }
+                    if (session !== this.rangeDragSession) {
+                        return;
+                    }
                     this.rangeDragFetchInFlight = false;
                     if (this.rangeDrag.active && this.rangeDragQueuedStart !== null) {
                         this.queueRangeDragFetch();
@@ -1213,20 +1331,29 @@ export default defineComponent({
             this.rangeDragFetchInFlight = false;
         },
         queueRangeDragStatusApply(status: StatisticsStatus, rangeStart: number) {
-            if (!this.rangeDrag.active || this.rangeDragEnding) { return; }
+            if (!this.rangeDrag.active || this.rangeDragEnding) {
+                return;
+            }
 
             this.rangeDragPendingStatus = { status, rangeStart };
-            if (this.rangeDragStatusApplyTimer !== null) { return; }
+            if (this.rangeDragStatusApplyTimer !== null) {
+                return;
+            }
 
             this.rangeDragStatusApplyTimer = window.setTimeout(() => this.flushRangeDragStatusApply(), 140);
         },
         flushRangeDragStatusApply() {
             this.rangeDragStatusApplyTimer = null;
-            if (!this.rangeDrag.active || this.rangeDragEnding || this.rangeDragPendingStatus === null) { return; }
+            if (!this.rangeDrag.active || this.rangeDragEnding || this.rangeDragPendingStatus === null) {
+                return;
+            }
 
             const quietMs = performance.now() - this.rangeDragLastMoveAt;
             if (quietMs < 120) {
-                this.rangeDragStatusApplyTimer = window.setTimeout(() => this.flushRangeDragStatusApply(), 120 - quietMs);
+                this.rangeDragStatusApplyTimer = window.setTimeout(
+                    () => this.flushRangeDragStatusApply(),
+                    120 - quietMs
+                );
                 return;
             }
 
@@ -1273,7 +1400,9 @@ export default defineComponent({
             }
         },
         cancelRangeDragPointer(event: PointerEvent) {
-            if (!this.rangeDrag.active || this.rangeDrag.pointerId !== event.pointerId) { return; }
+            if (!this.rangeDrag.active || this.rangeDrag.pointerId !== event.pointerId) {
+                return;
+            }
             if (event.pointerType === 'mouse') {
                 event.preventDefault();
                 return;
@@ -1288,7 +1417,9 @@ export default defineComponent({
             this.resetRangeDragState(true);
         },
         setChartTab(tab: ChartTab) {
-            if (this.selectedChartTab === tab) { return; }
+            if (this.selectedChartTab === tab) {
+                return;
+            }
             this.destroyCharts();
             this.selectedChartTab = tab;
             this.getData({ showLoading: false });
@@ -1307,7 +1438,9 @@ export default defineComponent({
             }
         },
         ensurePanelFilterDefaults() {
-            if (this.panels.length === 0) { return; }
+            if (this.panels.length === 0) {
+                return;
+            }
 
             const options = this.panelInverterOptions.map((option) => option.value);
             const validSelection = this.selectedPanelInverters.filter((value) => options.includes(value));
@@ -1322,10 +1455,14 @@ export default defineComponent({
             this.panelFilterInitialized = true;
         },
         scheduleAdjacentRangePrefetch(delay = 250) {
-            if (this.rangeDragEnding) { return; }
+            if (this.rangeDragEnding) {
+                return;
+            }
 
             if (this.prefetchTimer !== null) {
-                if (this.rangeDrag.active && delay > 0) { return; }
+                if (this.rangeDrag.active && delay > 0) {
+                    return;
+                }
                 window.clearTimeout(this.prefetchTimer);
             }
 
@@ -1335,49 +1472,78 @@ export default defineComponent({
             }, delay);
         },
         adjacentRangePrefetchStarts(period: string, view: ChartTab): number[] {
-            if (!this.status) { return []; }
+            if (!this.status) {
+                return [];
+            }
 
-            const baseStart = this.rangeDrag.active && this.rangeDrag.lastAppliedStart !== null
-                ? this.rangeDrag.lastAppliedStart
-                : this.status.from;
+            const baseStart =
+                this.rangeDrag.active && this.rangeDrag.lastAppliedStart !== null
+                    ? this.rangeDrag.lastAppliedStart
+                    : this.status.from;
             const span = this.rangeBufferSpanSeconds();
             const dragDelta = this.rangeDrag.currentX - this.rangeDrag.startX;
-            const dragDirection = dragDelta > 0 ? -1 : (dragDelta < 0 ? 1 : 0);
-            const offsets = this.rangeDrag.active && dragDirection !== 0
-                ? [0, dragDirection * span, dragDirection * span * 2, -dragDirection * span]
-                : [-span, span];
+            const dragDirection = dragDelta > 0 ? -1 : dragDelta < 0 ? 1 : 0;
+            const offsets =
+                this.rangeDrag.active && dragDirection !== 0
+                    ? [0, dragDirection * span, dragDirection * span * 2, -dragDirection * span]
+                    : [-span, span];
             const seen = new Set<number>();
 
             return offsets
                 .map((offset) => this.clampRangeStart(baseStart + offset, false))
                 .filter((start) => {
-                    if (seen.has(start)) { return false; }
+                    if (seen.has(start)) {
+                        return false;
+                    }
                     seen.add(start);
-                    if (!this.rangeDrag.active && start === this.status?.from) { return false; }
-                    if (this.getCachedStatus(period, start, view)) { return false; }
+                    if (!this.rangeDrag.active && start === this.status?.from) {
+                        return false;
+                    }
+                    if (this.getCachedStatus(period, start, view)) {
+                        return false;
+                    }
                     return !this.pendingStatusRequests[this.statisticsCacheKey(period, start, view)];
                 });
         },
         prefetchAdjacentRanges() {
-            if (!this.status || this.dataLoading || this.prefetchInFlight || this.rangeDragEnding) { return; }
+            if (!this.status || this.dataLoading || this.prefetchInFlight || this.rangeDragEnding) {
+                return;
+            }
 
             const period = this.selectedPeriod;
             const view = this.selectedChartTab;
             const starts = this.adjacentRangePrefetchStarts(period, view);
-            if (starts.length === 0) { return; }
+            if (starts.length === 0) {
+                return;
+            }
 
             this.prefetchInFlight = true;
-            starts.reduce(
-                (chain, start) => chain.then(() => this.fetchStatisticsStatus(period, start, view, true).then(() => {
-                    if (!this.rangeDrag.active && period === this.selectedPeriod && view === this.selectedChartTab && !this.dataLoading) {
-                        this.$nextTick(() => this.renderActiveChart());
-                    }
-                })),
-                Promise.resolve()
-            ).catch(() => undefined)
+            starts
+                .reduce(
+                    (chain, start) =>
+                        chain.then(() =>
+                            this.fetchStatisticsStatus(period, start, view, true).then(() => {
+                                if (
+                                    !this.rangeDrag.active &&
+                                    period === this.selectedPeriod &&
+                                    view === this.selectedChartTab &&
+                                    !this.dataLoading
+                                ) {
+                                    this.$nextTick(() => this.renderActiveChart());
+                                }
+                            })
+                        ),
+                    Promise.resolve()
+                )
+                .catch(() => undefined)
                 .then(() => {
                     this.prefetchInFlight = false;
-                    if (this.rangeDrag.active && !this.rangeDragEnding && period === this.selectedPeriod && view === this.selectedChartTab) {
+                    if (
+                        this.rangeDrag.active &&
+                        !this.rangeDragEnding &&
+                        period === this.selectedPeriod &&
+                        view === this.selectedChartTab
+                    ) {
                         this.scheduleAdjacentRangePrefetch(80);
                     }
                 });
@@ -1391,7 +1557,9 @@ export default defineComponent({
         },
         timestampFromDateInput(value: string): number | null {
             const match = value.match(/^(\d{4})-(\d{2})-(\d{2})$/);
-            if (!match) { return null; }
+            if (!match) {
+                return null;
+            }
 
             const year = Number(match[1]);
             const month = Number(match[2]);
@@ -1409,7 +1577,9 @@ export default defineComponent({
         },
         alignRangeStartToStep(timestamp: number): number {
             const step = this.dragStepSeconds();
-            if (step <= 1) { return Math.floor(timestamp); }
+            if (step <= 1) {
+                return Math.floor(timestamp);
+            }
             return Math.floor(timestamp / step) * step;
         },
         latestSelectableRangeStart(): number {
@@ -1425,7 +1595,9 @@ export default defineComponent({
         clampRangeStart(timestamp: number, align = true): number {
             let start = Math.floor(timestamp);
             const min = this.status?.recent_from
-                ? (this.isDailyPeriod ? this.startOfLocalDay(this.status.recent_from) : this.alignRangeStartToStep(this.status.recent_from))
+                ? this.isDailyPeriod
+                    ? this.startOfLocalDay(this.status.recent_from)
+                    : this.alignRangeStartToStep(this.status.recent_from)
                 : 0;
             const max = this.latestSelectableRangeStart();
 
@@ -1453,7 +1625,9 @@ export default defineComponent({
             return this.status?.sample_interval_seconds || 5 * 60;
         },
         prefetchStepCount(): number {
-            if (this.isDailyPeriod) { return 1; }
+            if (this.isDailyPeriod) {
+                return 1;
+            }
             return 1;
         },
         isEmptyPowerSample(sample: StatisticsSample): boolean {
@@ -1536,30 +1710,46 @@ export default defineComponent({
             };
         },
         activeManagedChart(): ManagedChart | null {
-            if (this.selectedChartTab === 'flow') { return this.flowChart; }
-            if (this.selectedChartTab === 'panels') { return this.panelChart; }
-            if (this.selectedChartTab === 'loads') { return this.loadChart; }
-            if (this.selectedChartTab === 'temperatures') { return this.temperatureChart; }
-            if (this.selectedChartTab === 'boost') { return this.boostChart; }
+            if (this.selectedChartTab === 'flow') {
+                return this.flowChart;
+            }
+            if (this.selectedChartTab === 'panels') {
+                return this.panelChart;
+            }
+            if (this.selectedChartTab === 'loads') {
+                return this.loadChart;
+            }
+            if (this.selectedChartTab === 'temperatures') {
+                return this.temperatureChart;
+            }
+            if (this.selectedChartTab === 'boost') {
+                return this.boostChart;
+            }
             return this.batteryChart;
         },
         rangeDragOffsetPixels(): number {
-            if (!this.rangeDrag.active || this.rangeDrag.width <= 0) { return 0; }
+            if (!this.rangeDrag.active || this.rangeDrag.width <= 0) {
+                return 0;
+            }
 
             const renderedStart = this.status?.from ?? this.rangeDrag.baseStart;
             const renderedShiftSeconds = renderedStart - this.rangeDrag.baseStart;
             const renderedPixels = -(renderedShiftSeconds / this.periodDurationSeconds) * this.rangeDrag.width;
-            return (this.rangeDrag.currentX - this.rangeDrag.startX) - renderedPixels;
+            return this.rangeDrag.currentX - this.rangeDrag.startX - renderedPixels;
         },
         updateActiveChartDragOffset() {
             const chart = this.activeManagedChart() as StatisticsDragChart | null;
-            if (!chart) { return; }
+            if (!chart) {
+                return;
+            }
 
             chart.$statisticsRangeDragOffsetPx = this.rangeDragOffsetPixels();
             chart.draw();
         },
         scheduleActiveChartDragOffsetUpdate() {
-            if (this.rangeDragDrawFrame !== null) { return; }
+            if (this.rangeDragDrawFrame !== null) {
+                return;
+            }
 
             this.rangeDragDrawFrame = window.requestAnimationFrame(() => {
                 this.rangeDragDrawFrame = null;
@@ -1570,7 +1760,9 @@ export default defineComponent({
             this.renderActiveChart();
         },
         renderActiveChart() {
-            if (!this.status) { return; }
+            if (!this.status) {
+                return;
+            }
 
             if (this.selectedChartTab === 'flow') {
                 this.renderFlowChart();
@@ -1609,7 +1801,9 @@ export default defineComponent({
         },
         renderFlowChart() {
             const canvas = this.$refs.flowChart as HTMLCanvasElement | undefined;
-            if (!canvas) { return; }
+            if (!canvas) {
+                return;
+            }
 
             const unit = this.isDailyPeriod ? 'energy' : 'power';
             const points = this.plotFlowPoints;
@@ -1670,9 +1864,8 @@ export default defineComponent({
                                 text: this.isDailyPeriod ? this.$t('statistics.Energy') : this.$t('statistics.Power'),
                             },
                             ticks: {
-                                callback: (value) => unit === 'energy'
-                                    ? this.formatWh(Number(value))
-                                    : this.formatWatt(Number(value)),
+                                callback: (value) =>
+                                    unit === 'energy' ? this.formatWh(Number(value)) : this.formatWatt(Number(value)),
                             },
                         },
                     },
@@ -1707,25 +1900,27 @@ export default defineComponent({
                 '#795548',
                 '#607d8b',
             ];
-            const datasets: ChartDataset<'bar' | 'line', (number | null)[]>[] = this.panelSeries.map((series, index) => {
-                const color = colors[index % colors.length];
-                return {
-                    type: this.isDailyPeriod ? 'bar' : 'line',
-                    label: series.label,
-                    data: points.map((point) => this.panelSeriesValue(point, series.positions)),
-                    backgroundColor: this.isDailyPeriod ? `${color}99` : 'transparent',
-                    borderColor: color,
-                    borderWidth: this.isDailyPeriod ? 1 : 2,
-                    clip: false,
-                    fill: false,
-                    pointRadius: !this.isDailyPeriod && points.length < 3 ? 2 : 0,
-                    spanGaps: true,
-                    tension: 0.15,
-                    stack: this.isDailyPeriod ? 'panels' : undefined,
-                    barPercentage: this.isDailyPeriod ? 0.82 : undefined,
-                    categoryPercentage: this.isDailyPeriod ? 0.78 : undefined,
-                };
-            });
+            const datasets: ChartDataset<'bar' | 'line', (number | null)[]>[] = this.panelSeries.map(
+                (series, index) => {
+                    const color = colors[index % colors.length];
+                    return {
+                        type: this.isDailyPeriod ? 'bar' : 'line',
+                        label: series.label,
+                        data: points.map((point) => this.panelSeriesValue(point, series.positions)),
+                        backgroundColor: this.isDailyPeriod ? `${color}99` : 'transparent',
+                        borderColor: color,
+                        borderWidth: this.isDailyPeriod ? 1 : 2,
+                        clip: false,
+                        fill: false,
+                        pointRadius: !this.isDailyPeriod && points.length < 3 ? 2 : 0,
+                        spanGaps: true,
+                        tension: 0.15,
+                        stack: this.isDailyPeriod ? 'panels' : undefined,
+                        barPercentage: this.isDailyPeriod ? 0.82 : undefined,
+                        categoryPercentage: this.isDailyPeriod ? 0.78 : undefined,
+                    };
+                }
+            );
 
             const config: ChartConfiguration<'bar' | 'line', (number | null)[], string> = {
                 type: this.isDailyPeriod ? 'bar' : 'line',
@@ -1783,9 +1978,8 @@ export default defineComponent({
                                 text: this.isDailyPeriod ? this.$t('statistics.Energy') : this.$t('statistics.Power'),
                             },
                             ticks: {
-                                callback: (value) => unit === 'energy'
-                                    ? this.formatWh(Number(value))
-                                    : this.formatWatt(Number(value)),
+                                callback: (value) =>
+                                    unit === 'energy' ? this.formatWh(Number(value)) : this.formatWatt(Number(value)),
                             },
                         },
                     },
@@ -1882,18 +2076,23 @@ export default defineComponent({
             this.flexibleLoads.forEach((load) => indices.add(load.index));
             sourcePoints.forEach((point) => {
                 point.flexibleValues.forEach((value, index) => {
-                    if (value !== 0) { indices.add(index); }
+                    if (value !== 0) {
+                        indices.add(index);
+                    }
                 });
             });
 
-            return Array.from(indices).sort((a, b) => a - b).map((index) => (
-                this.flexibleLoads.find((load) => load.index === index) || {
-                    index,
-                    name: `Load ${index + 1}`,
-                    enabled: false,
-                    energy_wh: 0,
-                }
-            ));
+            return Array.from(indices)
+                .sort((a, b) => a - b)
+                .map(
+                    (index) =>
+                        this.flexibleLoads.find((load) => load.index === index) || {
+                            index,
+                            name: `Load ${index + 1}`,
+                            enabled: false,
+                            energy_wh: 0,
+                        }
+                );
         },
         renderLoadChart() {
             const canvas = this.$refs.loadChart as HTMLCanvasElement | undefined;
@@ -1913,7 +2112,10 @@ export default defineComponent({
                 { background: 'rgba(204, 121, 167, 0.78)', border: '#a34e7d' },
             ];
             const datasets: ChartDataset<'bar', number[]>[] = this.getLoadDefinitions(points).map((load) => {
-                const color = colors[load.index % colors.length] ?? { background: 'rgba(108, 117, 125, 0.46)', border: '#6c757d' };
+                const color = colors[load.index % colors.length] ?? {
+                    background: 'rgba(108, 117, 125, 0.46)',
+                    border: '#6c757d',
+                };
                 return {
                     type: 'bar',
                     label: load.name,
@@ -1996,9 +2198,8 @@ export default defineComponent({
                                 text: this.isDailyPeriod ? this.$t('statistics.Energy') : this.$t('statistics.Power'),
                             },
                             ticks: {
-                                callback: (value) => unit === 'energy'
-                                    ? this.formatWh(Number(value))
-                                    : this.formatWatt(Number(value)),
+                                callback: (value) =>
+                                    unit === 'energy' ? this.formatWh(Number(value)) : this.formatWatt(Number(value)),
                             },
                         },
                     },
@@ -2110,7 +2311,9 @@ export default defineComponent({
         },
         renderBoostChart() {
             const canvas = this.$refs.boostChart as HTMLCanvasElement | undefined;
-            if (!canvas) { return; }
+            if (!canvas) {
+                return;
+            }
 
             const unit = this.isDailyPeriod ? 'energy' : 'power';
             const points = this.plotBoostPoints;
@@ -2227,9 +2430,8 @@ export default defineComponent({
                                 text: this.isDailyPeriod ? this.$t('statistics.Energy') : this.$t('statistics.Power'),
                             },
                             ticks: {
-                                callback: (value) => unit === 'energy'
-                                    ? this.formatWh(Number(value))
-                                    : this.formatWatt(Number(value)),
+                                callback: (value) =>
+                                    unit === 'energy' ? this.formatWh(Number(value)) : this.formatWatt(Number(value)),
                             },
                         },
                     },
@@ -2241,15 +2443,17 @@ export default defineComponent({
         },
         renderBatteryChart() {
             const canvas = this.$refs.batteryChart as HTMLCanvasElement | undefined;
-            if (!canvas) { return; }
+            if (!canvas) {
+                return;
+            }
 
             const points = this.isDailyPeriod
                 ? this.days.map((day) => ({ t: day.t, soc: day.avg_battery_soc ?? null, plannedSoc: null }))
                 : this.plotSamples.map((sample) => ({
-                    t: sample.t,
-                    soc: sample.battery_soc ?? null,
-                    plannedSoc: sample.battery_planned_soc ?? null,
-                }));
+                      t: sample.t,
+                      soc: sample.battery_soc ?? null,
+                      plannedSoc: sample.battery_planned_soc ?? null,
+                  }));
             const labels = this.chartLabels(points);
             const hasPlannedSoc = points.some((point) => point.plannedSoc !== null);
             const datasets: ChartDataset<'line', (number | null)[]>[] = [
@@ -2376,7 +2580,9 @@ export default defineComponent({
 
             positions.forEach((position) => {
                 const value = point.values[position];
-                if (typeof value !== 'number' || !Number.isFinite(value)) { return; }
+                if (typeof value !== 'number' || !Number.isFinite(value)) {
+                    return;
+                }
 
                 sum += value;
                 hasValue = true;
@@ -2452,11 +2658,15 @@ export default defineComponent({
             return `${this.$n(seconds, 'decimalNoDigits')} s`;
         },
         formatOptionalPercent(value?: number): string {
-            if (value === undefined || value === null || Number.isNaN(value)) { return '-'; }
+            if (value === undefined || value === null || Number.isNaN(value)) {
+                return '-';
+            }
             return `${this.$n(value, 'decimalOneDigit')} %`;
         },
         formatTemperature(value?: number | null): string {
-            if (value === undefined || value === null || Number.isNaN(value)) { return '-'; }
+            if (value === undefined || value === null || Number.isNaN(value)) {
+                return '-';
+            }
             return `${this.$n(value, 'decimalOneDigit')} °C`;
         },
     },

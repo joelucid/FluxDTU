@@ -212,11 +212,7 @@
                 !gridChargerData.powerLimiterManaged
             "
         >
-            <CardElement
-                centerContent
-                textVariant="text-bg-primary"
-                :text="$t('invertertotalinfo.ChargerGridTarget')"
-            >
+            <CardElement centerContent textVariant="text-bg-primary" :text="$t('invertertotalinfo.ChargerGridTarget')">
                 <h2>
                     {{
                         $n(gridChargerData.targetPowerConsumption.v, 'decimal', {

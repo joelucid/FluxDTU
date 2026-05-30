@@ -1193,7 +1193,12 @@ export default defineComponent({
             const existing = Array.isArray(configs) ? configs : configs ? [configs] : [];
             const defaults = [
                 { name: 'Flexible Load 1', priority: 1, mqtt_topic: '', mqtt_retain: false },
-                { name: 'Freezer Battery', priority: 2, mqtt_topic: 'freezer_battery/pv_available/set', mqtt_retain: true },
+                {
+                    name: 'Freezer Battery',
+                    priority: 2,
+                    mqtt_topic: 'freezer_battery/pv_available/set',
+                    mqtt_retain: true,
+                },
                 { name: 'Flexible Load 3', priority: 3, mqtt_topic: '', mqtt_retain: false },
                 { name: 'Flexible Load 4', priority: 4, mqtt_topic: '', mqtt_retain: false },
             ];
@@ -1201,7 +1206,7 @@ export default defineComponent({
             return defaults.map((defaultsForLoad, index) =>
                 this.tidyUpFlexibleLoadConfig({
                     ...defaultsForLoad,
-                    ...existing[index],
+                    ...(existing[index] || {}),
                 } as PowerLimiterFlexibleLoadConfig)
             );
         },
@@ -1231,7 +1236,7 @@ export default defineComponent({
                 stop_delay: 60,
                 battery_support_power_threshold: 50,
                 max_battery_support_energy: 25,
-                ...config,
+                ...(config || {}),
             };
         },
         tidyUpInverterConfigs(inverters: PowerLimiterInverterConfig[]): PowerLimiterInverterConfig[] {

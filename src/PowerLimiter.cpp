@@ -63,6 +63,14 @@ static uint32_t latestMillis(uint32_t a, uint32_t b)
     return millisAtOrAfter(a, b) ? a : b;
 }
 
+static uint16_t ceilPositiveWattsToUint16(float watts)
+{
+    if (watts <= 0.0f) { return 0; }
+    return static_cast<uint16_t>(std::min<float>(
+            std::ceil(watts),
+            std::numeric_limits<uint16_t>::max()));
+}
+
 struct DistributedChange {
     PowerLimiterInverter* inverter;
     uint16_t capacity;
@@ -148,8 +156,8 @@ struct ThermalTrendState {
 
 static std::vector<ThermalTrendState> sThermalTrendStates;
 static std::vector<ThermalDebugItem> sThermalDebugItems;
-static std::string sThermalDebugSource;
-static std::string sThermalDebugFilterExpression;
+static String sThermalDebugSource;
+static String sThermalDebugFilterExpression;
 static uint32_t sThermalDebugMillis = 0;
 static uint16_t sThermalDebugExchangeBudgetWatts = 0;
 
@@ -267,8 +275,8 @@ static void publishThermalDebug(
         char const* action,
         uint16_t exchangeBudgetWatts = 0)
 {
-    sThermalDebugSource = source;
-    sThermalDebugFilterExpression = filterExpression;
+    sThermalDebugSource = source.c_str();
+    sThermalDebugFilterExpression = filterExpression.c_str();
     sThermalDebugMillis = millis();
     sThermalDebugExchangeBudgetWatts = exchangeBudgetWatts;
     sThermalDebugItems.clear();
@@ -384,21 +392,19 @@ static uint16_t thermalRebalanceCapacity(float deltaCelsius, uint16_t maxChangeW
     return std::min<uint16_t>(requested, maxChangeWatts);
 }
 
-static uint16_t getMeasuredThermalExchangeBudgetWatts(uint16_t hysteresis, int16_t targetConsumption)
+static uint16_t getMeasuredThermalExchangeBudgetWatts(uint16_t hysteresis, float targetConsumption)
 {
     if (!PowerMeter.isDataValid()) { return 0; }
 
     auto const meterValue = PowerMeter.getPowerTotal();
-    auto const roundedMeterValue = static_cast<int32_t>(
-            meterValue + (meterValue > 0 ? 0.5 : -0.5));
-    auto const target = static_cast<int32_t>(targetConsumption);
-    auto const margin = static_cast<int32_t>(std::max<uint16_t>(1, hysteresis));
-    auto const surplus = target - roundedMeterValue - margin;
+    auto const target = targetConsumption;
+    auto const margin = static_cast<float>(std::max<uint16_t>(1, hysteresis));
+    auto const surplus = target - meterValue - margin;
 
-    if (surplus <= 0) { return 0; }
+    if (surplus <= 0.0f) { return 0; }
 
     return static_cast<uint16_t>(
-            std::min<int32_t>(surplus, std::numeric_limits<uint16_t>::max()));
+            std::round(std::min<float>(surplus, std::numeric_limits<uint16_t>::max())));
 }
 
 static uint16_t distributeByWeight(uint16_t requested, std::vector<DistributedChange>& changes)
@@ -919,26 +925,26 @@ void PowerLimiterClass::loop()
         && GridCharger.supportsPowerLimiterControl();
     auto storageTargetPowerConsumption = getStorageTargetPowerConsumption();
     int32_t gridChargerMeterAdjustment = 0;
-    auto roundedPowerMeterValue = []() -> int32_t {
-        auto const meterValue = PowerMeter.getPowerTotal();
-        return static_cast<int32_t>(meterValue + (meterValue > 0 ? 0.5 : -0.5));
+    auto powerMeterValue = []() -> float {
+        return PowerMeter.getPowerTotal();
     };
 
     if (gridChargerManaged && PowerMeter.isDataValid()) {
-        auto const meterValue = roundedPowerMeterValue();
+        auto const meterValue = powerMeterValue();
         auto const gridChargerInput = GridCharger.getPowerLimiterExpectedInputPowerWatts();
         if (meterValue > storageTargetPowerConsumption && gridChargerInput > 0) {
-            auto const requestedReduction = static_cast<uint16_t>(std::min<int32_t>(
-                    gridChargerInput,
-                    meterValue - storageTargetPowerConsumption));
-            auto const appliedReduction =
+            auto const requestedReduction = ceilPositiveWattsToUint16(
+                    std::min<float>(
+                        gridChargerInput,
+                        meterValue - storageTargetPowerConsumption));
+            uint16_t const appliedReduction =
                 GridCharger.applyPowerLimiterInputPowerReduction(requestedReduction);
             if (appliedReduction > 0) {
                 gridChargerMeterAdjustment -= appliedReduction;
                 gridChargerLimitUpdated = true;
                 DTU_LOGD("reducing grid charger input by %u W before requesting battery output "
-                        "(meter %ld W, storage target %d W)",
-                        appliedReduction, static_cast<long>(meterValue),
+                        "(meter %.1f W, storage target %.1f W)",
+                        appliedReduction, meterValue,
                         storageTargetPowerConsumption);
             }
         }
@@ -978,7 +984,7 @@ void PowerLimiterClass::loop()
 
         if (batteryPowerRequest > batteryRequestLimit) {
             DTU_LOGD("limiting battery-powered inverter request from %u W to %u W "
-                    "to keep battery grid target at %d W",
+                    "to keep battery grid target at %.1f W",
                     batteryPowerRequest, batteryRequestLimit, batteryTargetPowerConsumption);
             batteryPowerRequest = batteryRequestLimit;
         }
@@ -1013,7 +1019,7 @@ void PowerLimiterClass::loop()
     if (oBatteryRequestLimit && powerBusUsage > *oBatteryRequestLimit) {
         auto batteryTargetPowerConsumption = getBatteryTargetPowerConsumption();
         DTU_LOGD("limiting DC power bus usage from %u W to %u W "
-                "to keep battery grid target at %d W",
+                "to keep battery grid target at %.1f W",
                 powerBusUsage, *oBatteryRequestLimit, batteryTargetPowerConsumption);
         powerBusUsage = *oBatteryRequestLimit;
     }
@@ -1032,10 +1038,10 @@ void PowerLimiterClass::loop()
         auto const currentInverterOutput = getCurrentInvertersOutputAcWatts();
         auto const expectedInverterOutput =
             coveredBySolar + coveredBySmartBuffer + coveredByBattery;
-        auto expectedMeterValue = roundedPowerMeterValue()
+        auto expectedMeterValue = powerMeterValue()
             + gridChargerMeterAdjustment
-            - (static_cast<int32_t>(expectedInverterOutput)
-                    - static_cast<int32_t>(currentInverterOutput));
+            - (static_cast<float>(expectedInverterOutput)
+                    - static_cast<float>(currentInverterOutput));
 
         auto updateExpectedMeterAfterChargerChange = [&](int32_t delta) {
             gridChargerMeterAdjustment += delta;
@@ -1044,7 +1050,7 @@ void PowerLimiterClass::loop()
 
         if (coveredByBattery > 0) {
             auto const gridChargerInput = GridCharger.getPowerLimiterExpectedInputPowerWatts();
-            auto const appliedReduction =
+            uint16_t const appliedReduction =
                 GridCharger.applyPowerLimiterInputPowerReduction(gridChargerInput);
             if (appliedReduction > 0) {
                 updateExpectedMeterAfterChargerChange(-static_cast<int32_t>(appliedReduction));
@@ -1056,30 +1062,30 @@ void PowerLimiterClass::loop()
         } else if (expectedMeterValue > storageTargetPowerConsumption) {
             auto const gridChargerInput = GridCharger.getPowerLimiterExpectedInputPowerWatts();
             if (gridChargerInput > 0) {
-                auto const requestedReduction = static_cast<uint16_t>(std::min<int32_t>(
-                        gridChargerInput,
-                        expectedMeterValue - storageTargetPowerConsumption));
-                auto const appliedReduction =
+                auto const requestedReduction = ceilPositiveWattsToUint16(
+                        std::min<float>(
+                            gridChargerInput,
+                            expectedMeterValue - storageTargetPowerConsumption));
+                uint16_t const appliedReduction =
                     GridCharger.applyPowerLimiterInputPowerReduction(requestedReduction);
                 if (appliedReduction > 0) {
                     updateExpectedMeterAfterChargerChange(-static_cast<int32_t>(appliedReduction));
                     gridChargerLimitUpdated = true;
-                    DTU_LOGD("reducing grid charger input by %u W to keep storage grid target at %d W",
+                    DTU_LOGD("reducing grid charger input by %u W to keep storage grid target at %.1f W",
                             appliedReduction, storageTargetPowerConsumption);
                 }
             }
         } else if (expectedMeterValue < storageTargetPowerConsumption) {
-            auto const requestedIncrease = static_cast<uint16_t>(std::min<int32_t>(
-                    storageTargetPowerConsumption - expectedMeterValue,
-                    std::numeric_limits<uint16_t>::max()));
-            auto const appliedIncrease =
+            auto const requestedIncrease = ceilPositiveWattsToUint16(
+                    storageTargetPowerConsumption - expectedMeterValue);
+            uint16_t const appliedIncrease =
                 GridCharger.applyPowerLimiterInputPowerIncrease(requestedIncrease);
             if (appliedIncrease > 0) {
                 updateExpectedMeterAfterChargerChange(appliedIncrease);
                 gridChargerLimitUpdated = true;
                 DTU_LOGD("increasing grid charger input by %u W after battery output reached zero "
-                        "(expected meter %ld W, storage target %d W)",
-                        appliedIncrease, static_cast<long>(expectedMeterValue),
+                        "(expected meter %.1f W, storage target %.1f W)",
+                        appliedIncrease, expectedMeterValue,
                         storageTargetPowerConsumption);
             }
         }
@@ -1273,6 +1279,12 @@ void PowerLimiterClass::updateDynamicBatteryTarget()
 {
     auto const& config = Configuration.get();
 
+    if (!config.PowerLimiter.Enabled
+            || Mode::Normal != _mode
+            || _inverters.empty()) {
+        return;
+    }
+
     if (!config.PowerLimiter.BatteryTargetPowerConsumptionDynamicEnabled
             || config.PowerLimiter.BatteryTargetPowerConsumptionDynamicWindow == 0) {
         resetDynamicBatteryTargetState();
@@ -1289,11 +1301,10 @@ void PowerLimiterClass::updateDynamicBatteryTarget()
     _lastDynamicBatteryTargetPowerMeterUpdate = powerMeterUpdate;
 
     auto const meterValue = PowerMeter.getPowerTotal();
-    int32_t roundedMeterValue = static_cast<int32_t>(meterValue + (meterValue > 0 ? 0.5 : -0.5));
-    int32_t error = roundedMeterValue - config.PowerLimiter.TargetPowerConsumption;
-    error = std::clamp<int32_t>(error, std::numeric_limits<int16_t>::min(), std::numeric_limits<int16_t>::max());
-
-    auto const watts = static_cast<float>(error);
+    auto const watts = std::clamp<float>(
+            meterValue - static_cast<float>(config.PowerLimiter.TargetPowerConsumption),
+            std::numeric_limits<int16_t>::min(),
+            std::numeric_limits<int16_t>::max());
 
     if (!_dynamicBatteryTargetInitialized) {
         _dynamicBatteryTargetMean = watts;
@@ -1314,16 +1325,15 @@ void PowerLimiterClass::updateDynamicBatteryTarget()
         * (_dynamicBatteryTargetVariance + (alpha * deviation * deviation));
 
     auto const calculatedTarget = calcBatteryTargetPowerConsumption();
-    auto const smoothedTarget = static_cast<int32_t>(std::round(
-            static_cast<float>(_batteryTargetPowerConsumption)
-            + (alpha * (static_cast<float>(calculatedTarget) - _batteryTargetPowerConsumption))));
-    _batteryTargetPowerConsumption = static_cast<int16_t>(std::clamp<int32_t>(
+    auto const smoothedTarget = _batteryTargetPowerConsumption
+        + (alpha * (calculatedTarget - _batteryTargetPowerConsumption));
+    _batteryTargetPowerConsumption = std::clamp<float>(
             smoothedTarget,
             std::numeric_limits<int16_t>::min(),
-            std::numeric_limits<int16_t>::max()));
+            std::numeric_limits<int16_t>::max());
 }
 
-int16_t PowerLimiterClass::getBatteryTargetPowerConsumption() const
+float PowerLimiterClass::getBatteryTargetPowerConsumption() const
 {
     auto const& config = Configuration.get();
 
@@ -1335,7 +1345,7 @@ int16_t PowerLimiterClass::getBatteryTargetPowerConsumption() const
     return _batteryTargetPowerConsumption;
 }
 
-int16_t PowerLimiterClass::getTargetPowerConsumption() const
+float PowerLimiterClass::getTargetPowerConsumption() const
 {
     auto const& config = Configuration.get();
 
@@ -1343,15 +1353,15 @@ int16_t PowerLimiterClass::getTargetPowerConsumption() const
         return config.PowerLimiter.TargetPowerConsumption;
     }
 
-    auto const target = static_cast<int32_t>(getStorageTargetPowerConsumption())
-        - static_cast<int32_t>(config.PowerLimiter.TargetPowerConsumptionStorageOffset);
-    return static_cast<int16_t>(std::clamp<int32_t>(
+    auto const target = getStorageTargetPowerConsumption()
+        - static_cast<float>(config.PowerLimiter.TargetPowerConsumptionStorageOffset);
+    return std::clamp<float>(
             target,
             std::numeric_limits<int16_t>::min(),
-            std::numeric_limits<int16_t>::max()));
+            std::numeric_limits<int16_t>::max());
 }
 
-int16_t PowerLimiterClass::getStorageTargetPowerConsumption() const
+float PowerLimiterClass::getStorageTargetPowerConsumption() const
 {
     return getBatteryTargetPowerConsumption();
 }
@@ -1366,30 +1376,32 @@ bool PowerLimiterClass::isGridChargerManaged() const
         && !Battery.getStats()->getImmediateChargingRequest();
 }
 
-int16_t PowerLimiterClass::calcBatteryTargetPowerConsumption() const
+float PowerLimiterClass::calcBatteryTargetPowerConsumption() const
 {
     auto const& config = Configuration.get();
-    auto const staticTarget = config.PowerLimiter.BatteryTargetPowerConsumption;
+    auto const staticTarget = static_cast<float>(config.PowerLimiter.BatteryTargetPowerConsumption);
 
     if (!config.PowerLimiter.BatteryTargetPowerConsumptionDynamicEnabled
             || !_dynamicBatteryTargetInitialized) {
         return staticTarget;
     }
 
-    auto const maxDynamicBias = static_cast<uint16_t>(std::numeric_limits<int16_t>::max());
-    uint16_t const staticBias = staticTarget < 0
-        ? std::min<uint16_t>(static_cast<uint16_t>(-static_cast<int32_t>(staticTarget)), maxDynamicBias)
-        : static_cast<uint16_t>(0);
-    auto const configuredMaxBias = std::min(config.PowerLimiter.BatteryTargetPowerConsumptionDynamicMax, maxDynamicBias);
+    auto const maxDynamicBias = static_cast<float>(std::numeric_limits<int16_t>::max());
+    auto const staticBias = staticTarget < 0.0f
+        ? std::min(-staticTarget, maxDynamicBias)
+        : 0.0f;
+    auto const configuredMaxBias = std::min<float>(
+            config.PowerLimiter.BatteryTargetPowerConsumptionDynamicMax,
+            maxDynamicBias);
     auto const maxBias = std::max(configuredMaxBias, staticBias);
     auto const multiplier = std::max(0.0f, config.PowerLimiter.BatteryTargetPowerConsumptionDynamicMultiplier);
-    auto calculatedBias = std::round(std::sqrt(std::max(0.0f, _dynamicBatteryTargetVariance)) * multiplier);
-    calculatedBias = std::clamp(calculatedBias, 0.0f, static_cast<float>(maxDynamicBias));
-    auto const dynamicBias = std::min<uint16_t>(
+    auto calculatedBias = std::sqrt(std::max(0.0f, _dynamicBatteryTargetVariance)) * multiplier;
+    calculatedBias = std::clamp(calculatedBias, 0.0f, maxDynamicBias);
+    auto const dynamicBias = std::min(
             maxBias,
-            std::max<uint16_t>(staticBias, static_cast<uint16_t>(calculatedBias)));
+            std::max(staticBias, calculatedBias));
 
-    return -static_cast<int16_t>(dynamicBias);
+    return -dynamicBias;
 }
 
 uint16_t PowerLimiterClass::calcTargetOutput() const
@@ -1397,12 +1409,12 @@ uint16_t PowerLimiterClass::calcTargetOutput() const
     return calcTargetOutput(getTargetPowerConsumption(), 0);
 }
 
-uint16_t PowerLimiterClass::calcTargetOutput(int16_t targetConsumption) const
+uint16_t PowerLimiterClass::calcTargetOutput(float targetConsumption) const
 {
     return calcTargetOutput(targetConsumption, 0);
 }
 
-uint16_t PowerLimiterClass::calcTargetOutput(int16_t targetConsumption, int32_t meterAdjustmentWatts) const
+uint16_t PowerLimiterClass::calcTargetOutput(float targetConsumption, int32_t meterAdjustmentWatts) const
 {
     auto const& config = Configuration.get();
     auto baseLoad = config.PowerLimiter.BaseLoadLimit;
@@ -1410,7 +1422,7 @@ uint16_t PowerLimiterClass::calcTargetOutput(int16_t targetConsumption, int32_t 
     auto meterValid = PowerMeter.isDataValid();
     auto meterValue = PowerMeter.getPowerTotal();
 
-    DTU_LOGD("targeting %d W, base load is %u W, power meter reads %.1f W (%s)",
+    DTU_LOGD("targeting %.1f W, base load is %u W, power meter reads %.1f W (%s)",
             targetConsumption, baseLoad, meterValue,
             (meterValid?"valid":"stale"));
 
@@ -1419,9 +1431,7 @@ uint16_t PowerLimiterClass::calcTargetOutput(int16_t targetConsumption, int32_t 
     // the desired total output of all eligible inverters is whatever they are
     // producing right now plus the difference between the target consumption
     // and the power meter reading
-    int32_t roundedMeterValue = static_cast<int32_t>(
-            meterValue + (meterValue > 0 ? 0.5 : -0.5));
-    roundedMeterValue += meterAdjustmentWatts;
+    float adjustedMeterValue = meterValue + meterAdjustmentWatts;
 
     // we have to correct the meter reading if there are inverters connected to
     // AC between the grid (billing meter) and FluxDTU's power meter.
@@ -1447,7 +1457,7 @@ uint16_t PowerLimiterClass::calcTargetOutput(int16_t targetConsumption, int32_t 
         // potentially produce way too much power. as information is missing
         // that could make sure we do the right thing, we have to make an
         // assumption about unreachable inverters.
-        roundedMeterValue -= upInv->getCurrentOutputAcWatts();
+        adjustedMeterValue -= upInv->getCurrentOutputAcWatts();
     }
 
     int32_t currentTotalOutput = 0;
@@ -1461,16 +1471,18 @@ uint16_t PowerLimiterClass::calcTargetOutput(int16_t targetConsumption, int32_t 
 
     // this value is negative if we are exporting more than "targetConsumption"
     // power to the grid using generators other than DPL-governed inverters.
-    int32_t targetOutput = currentTotalOutput + roundedMeterValue - targetConsumption;
+    float targetOutput = static_cast<float>(currentTotalOutput)
+        + adjustedMeterValue
+        - targetConsumption;
 
     // if we are already exporting more power than the (negative) target
     // consumption value allows us to, we don't want DPL-governed inverters to
     // produce any power at all.
-    if (targetOutput < 0) { return 0; }
+    if (targetOutput <= 0.0f) { return 0; }
 
-    return static_cast<uint16_t>(std::min<int32_t>(
+    return static_cast<uint16_t>(std::round(std::min<float>(
             targetOutput,
-            std::numeric_limits<uint16_t>::max()));
+            std::numeric_limits<uint16_t>::max())));
 }
 
 /**

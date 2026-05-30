@@ -27,7 +27,7 @@ String serializeJsonObject(JsonObjectConst const& object)
     serializeJson(object, serialized);
     return serialized;
 }
-}
+}  // namespace
 
 void OperationProfilesClass::init()
 {

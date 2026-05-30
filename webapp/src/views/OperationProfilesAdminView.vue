@@ -1,10 +1,5 @@
 <template>
-    <BasePage
-        :title="$t('operationprofiles.Title')"
-        :isLoading="dataLoading"
-        :show-reload="true"
-        @reload="getStatus"
-    >
+    <BasePage :title="$t('operationprofiles.Title')" :isLoading="dataLoading" :show-reload="true" @reload="getStatus">
         <BootstrapAlert
             v-model="alert.show"
             dismissible
@@ -112,14 +107,13 @@
         </div>
     </BasePage>
 
-    <ModalDialog modalId="operationProfileRename" small :title="$t('operationprofiles.Rename')" :closeText="$t('base.Cancel')">
-        <input
-            class="form-control"
-            type="text"
-            v-model="selectedProfile.name"
-            :maxlength="maxNameLength"
-            required
-        />
+    <ModalDialog
+        modalId="operationProfileRename"
+        small
+        :title="$t('operationprofiles.Rename')"
+        :closeText="$t('base.Cancel')"
+    >
+        <input class="form-control" type="text" v-model="selectedProfile.name" :maxlength="maxNameLength" required />
         <template #footer>
             <button
                 type="button"
@@ -132,7 +126,12 @@
         </template>
     </ModalDialog>
 
-    <ModalDialog modalId="operationProfileDelete" small :title="$t('operationprofiles.Delete')" :closeText="$t('base.Cancel')">
+    <ModalDialog
+        modalId="operationProfileDelete"
+        small
+        :title="$t('operationprofiles.Delete')"
+        :closeText="$t('base.Cancel')"
+    >
         {{
             $t('operationprofiles.DeleteQuestion', {
                 name: selectedProfile.name,
