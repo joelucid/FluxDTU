@@ -1201,7 +1201,7 @@ export default defineComponent({
             return defaults.map((defaultsForLoad, index) =>
                 this.tidyUpFlexibleLoadConfig({
                     ...defaultsForLoad,
-                    ...(existing[index] || {}),
+                    ...existing[index],
                 } as PowerLimiterFlexibleLoadConfig)
             );
         },
@@ -1231,7 +1231,7 @@ export default defineComponent({
                 stop_delay: 60,
                 battery_support_power_threshold: 50,
                 max_battery_support_energy: 25,
-                ...(config || {}),
+                ...config,
             };
         },
         tidyUpInverterConfigs(inverters: PowerLimiterInverterConfig[]): PowerLimiterInverterConfig[] {

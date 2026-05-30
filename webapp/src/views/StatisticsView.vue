@@ -1076,7 +1076,7 @@ export default defineComponent({
             this.rangeDragSession++;
             try {
                 target.setPointerCapture(event.pointerId);
-            } catch (_) {
+            } catch {
                 // Pointer capture is best-effort; window listeners below still finish the drag.
             }
             window.addEventListener('pointermove', this.moveRangeDrag, true);
