@@ -37,6 +37,9 @@ Compared with upstream OpenDTU-OnBattery, this fork currently carries work in
 these areas:
 
 - AC grid charger control integrated with the Dynamic Power Limiter.
+- Low-latency power-limit updates that send the next inverter limit after at
+  most one auto-ack response and without waiting for a pulled reply, reducing
+  observed limit-setting latency to about 3 seconds in the test installation.
 - Dynamic grid target handling, including battery/storage target offsets.
 - Operation profiles for switching complete runtime configurations.
 - Flexible load support with feed-in priorities, preserved state, measured load
@@ -49,6 +52,13 @@ these areas:
 
 This list is descriptive, not a stability guarantee. Some features are actively
 being tuned.
+
+## Statistics Example
+
+![FluxDTU statistics view with daily totals and power-history charts](docs/images/statistics-example.png)
+
+The statistics view combines daily energy totals with tabbed charts for power
+history, loads, panels, battery behavior, temperatures, and boost operation.
 
 ## Project State
 
