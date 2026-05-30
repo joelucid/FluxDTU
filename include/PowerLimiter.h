@@ -54,10 +54,11 @@ public:
     Mode getMode() const { return _mode; }
     bool usesBatteryPoweredInverter() const;
     bool usesSmartBufferPoweredInverter() const;
-    int16_t getTargetPowerConsumption() const;
-    int16_t getBatteryTargetPowerConsumption() const;
-    int16_t getStorageTargetPowerConsumption() const;
+    float getTargetPowerConsumption() const;
+    float getBatteryTargetPowerConsumption() const;
+    float getStorageTargetPowerConsumption() const;
     bool isGridChargerManaged() const;
+    void updateDynamicBatteryTarget();
     void addThermalDebugJson(JsonObject root) const;
 
     // used to interlock Huawei R48xx grid charger against battery-powered inverters
@@ -93,7 +94,7 @@ private:
     float _dynamicBatteryTargetMean = 0.0f;
     float _dynamicBatteryTargetVariance = 0.0f;
     bool _dynamicBatteryTargetInitialized = false;
-    int16_t _batteryTargetPowerConsumption = 0;
+    float _batteryTargetPowerConsumption = 0.0f;
 
     frozen::string const& getStatusText(Status status) const;
     void announceStatus(Status status);
@@ -103,11 +104,10 @@ private:
     uint16_t dcPowerBusToInverterAc(uint16_t dcPower) const;
     void unconditionalFullSolarPassthrough();
     void resetDynamicBatteryTargetState();
-    void updateDynamicBatteryTarget();
-    int16_t calcBatteryTargetPowerConsumption() const;
+    float calcBatteryTargetPowerConsumption() const;
     uint16_t calcTargetOutput() const;
-    uint16_t calcTargetOutput(int16_t targetConsumption) const;
-    uint16_t calcTargetOutput(int16_t targetConsumption, int32_t meterAdjustmentWatts) const;
+    uint16_t calcTargetOutput(float targetConsumption) const;
+    uint16_t calcTargetOutput(float targetConsumption, int32_t meterAdjustmentWatts) const;
     using inverter_filter_t = std::function<bool(PowerLimiterInverter const&)>;
     uint16_t updateInverterLimits(uint16_t powerRequested, inverter_filter_t filter,
             std::string const& filterExpression, bool allowStandby = true);
