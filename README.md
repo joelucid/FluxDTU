@@ -60,6 +60,14 @@ being tuned.
 The statistics view combines daily energy totals with tabbed charts for power
 history, loads, panels, battery behavior, temperatures, and boost operation.
 
+![FluxDTU power limiter timeline showing fast transient response](docs/images/power-limiter-transient-response.png)
+
+The power limiter timeline makes FluxDTU's ultra-fast transient response
+visible. Fast catch-up points mark short grid-power excursions and the immediate
+limit reaction that follows; in the test installation this closes transients in
+a few seconds, roughly an order of magnitude faster than the regular OpenDTU /
+OpenDTU-OnBattery polling and control path.
+
 ![FluxDTU loads statistics view showing flexible load categories](docs/images/flexible-load-statistics-example.png)
 
 The loads tab demonstrates flexible-load statistics by splitting measured load
