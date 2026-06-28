@@ -101,7 +101,7 @@ bool ActivePowerControlCommand::handleResponse(const fragment_t fragment[], cons
 void ActivePowerControlCommand::handleTxResult(const bool success)
 {
     if (!success) {
-        ESP_LOGW(TAG, "Assuming %s delivered despite missing auto ACK", getCommandName().c_str());
+        ESP_LOGD(TAG, "Assuming %s delivered despite missing auto ACK", getCommandName().c_str());
     }
 
     applyLimitFromCommand();
@@ -112,7 +112,7 @@ void ActivePowerControlCommand::applyLimitFromCommand()
     if ((getType() == PowerLimitControlType::RelativNonPersistent) || (getType() == PowerLimitControlType::RelativPersistent)) {
         _inv->SystemConfigPara()->setLimitPercent(getLimit());
     } else {
-        const uint16_t max_power = _inv->DevInfo()->getMaxPower();
+        const uint16_t max_power = _inv->getMaxPower();
         if (max_power > 0) {
             _inv->SystemConfigPara()->setLimitPercent(static_cast<float>(getLimit()) / max_power * 100);
         } else {

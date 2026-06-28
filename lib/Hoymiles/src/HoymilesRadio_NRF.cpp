@@ -212,7 +212,13 @@ bool HoymilesRadio_NRF::sendEsbPacket(CommandAbstract& cmd)
     bool txOk = _radio->write(cmd.getDataPayload(), cmd.getDataSize());
     uint8_t autoRetryCount = _radio->getARC();
     if (!txOk) {
-        ESP_LOGW(TAG, "TX %s failed (ARC: %" PRIu8 ")", cmd.getCommandName().c_str(), autoRetryCount);
+        if (cmd.isCompleteOnTxSuccess() && cmd.getMaxResendCount() > 0) {
+            ESP_LOGD(TAG, "TX %s failed (ARC: %" PRIu8 ")",
+                cmd.getCommandName().c_str(), autoRetryCount);
+        } else {
+            ESP_LOGW(TAG, "TX %s failed (ARC: %" PRIu8 ")",
+                cmd.getCommandName().c_str(), autoRetryCount);
+        }
     } else {
         ESP_LOGD(TAG, "TX %s succeeded (ARC: %" PRIu8 ")", cmd.getCommandName().c_str(), autoRetryCount);
     }

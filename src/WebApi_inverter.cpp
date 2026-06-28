@@ -59,14 +59,19 @@ void WebApiInverterClass::onInverterList(AsyncWebServerRequest* request)
             obj["zero_day"] = config.Inverter[i].ZeroYieldDayOnMidnight;
             obj["clear_eventlog"] = config.Inverter[i].ClearEventlogOnMidnight;
             obj["yieldday_correction"] = config.Inverter[i].YieldDayCorrection;
+            obj["max_power_override"] = config.Inverter[i].MaxPowerOverride;
 
             auto inv = Hoymiles.getInverterBySerial(config.Inverter[i].Serial);
             uint8_t max_channels;
             if (inv == nullptr) {
                 obj["type"] = "Unknown";
+                obj["detected_max_power"] = 0;
+                obj["max_power"] = config.Inverter[i].MaxPowerOverride;
                 max_channels = INV_MAX_CHAN_COUNT;
             } else {
                 obj["type"] = inv->typeName();
+                obj["detected_max_power"] = inv->getDetectedMaxPower();
+                obj["max_power"] = inv->getMaxPower();
                 max_channels = inv->Statistics()->getChannelsByType(TYPE_DC).size();
             }
 
@@ -212,6 +217,16 @@ void WebApiInverterClass::onInverterEdit(AsyncWebServerRequest* request)
         return;
     }
 
+    bool const hasMaxPowerOverride = root["max_power_override"].is<uint16_t>();
+    if (hasMaxPowerOverride
+            && root["max_power_override"].as<uint16_t>() > MAX_INVERTER_MAX_POWER_OVERRIDE) {
+        retMsg["message"] = "Max power override must between 0 and " STR_EXTRACT(MAX_INVERTER_MAX_POWER_OVERRIDE) "!";
+        retMsg["code"] = WebApiError::InverterInvalidMaxPowerOverride;
+        retMsg["param"]["max"] = MAX_INVERTER_MAX_POWER_OVERRIDE;
+        WebApi.sendJsonResponse(request, response, __FUNCTION__, __LINE__);
+        return;
+    }
+
     uint64_t old_serial = 0;
 
     {
@@ -233,6 +248,9 @@ void WebApiInverterClass::onInverterEdit(AsyncWebServerRequest* request)
         inverter.ZeroYieldDayOnMidnight = root["zero_day"] | false;
         inverter.ClearEventlogOnMidnight = root["clear_eventlog"] | false;
         inverter.YieldDayCorrection = root["yieldday_correction"] | false;
+        if (hasMaxPowerOverride) {
+            inverter.MaxPowerOverride = root["max_power_override"].as<uint16_t>();
+        }
 
         uint8_t arrayCount = 0;
         for (JsonVariant channel : channelArray) {
@@ -269,6 +287,7 @@ void WebApiInverterClass::onInverterEdit(AsyncWebServerRequest* request)
         inv->setZeroValuesIfUnreachable(inverter.ZeroRuntimeDataIfUnrechable);
         inv->setZeroYieldDayOnMidnight(inverter.ZeroYieldDayOnMidnight);
         inv->setClearEventlogOnMidnight(inverter.ClearEventlogOnMidnight);
+        inv->setMaxPowerOverride(inverter.MaxPowerOverride);
         inv->Statistics()->setYieldDayCorrection(inverter.YieldDayCorrection);
         for (uint8_t c = 0; c < INV_MAX_CHAN_COUNT; c++) {
             inv->Statistics()->setStringMaxPower(c, inverter.channel[c].MaxChannelPower);

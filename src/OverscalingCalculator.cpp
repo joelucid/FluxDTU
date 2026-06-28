@@ -2,6 +2,77 @@
 #include <algorithm>
 #include <cmath>
 
+namespace {
+
+float sumChannelPower(const std::vector<OverscalingCalculator::ChannelData>& channelData)
+{
+    float output = 0.0f;
+    for (auto const& channel : channelData) {
+        output += channel.powerAC;
+    }
+    return output;
+}
+
+std::vector<bool> collectLimitBoundChannels(
+        uint16_t currentLimitWatts,
+        const std::vector<OverscalingCalculator::ChannelData>& channelData,
+        float limitBindingThreshold)
+{
+    std::vector<bool> limitBoundChannels;
+    limitBoundChannels.reserve(channelData.size());
+
+    auto const totalChannels = channelData.size();
+    if (totalChannels == 0) {
+        return limitBoundChannels;
+    }
+    if (currentLimitWatts == 0) {
+        limitBoundChannels.resize(totalChannels, false);
+        return limitBoundChannels;
+    }
+
+    auto const threshold = std::clamp(limitBindingThreshold, 0.0f, 1.0f);
+    auto const currentPowerPerChannel =
+        static_cast<float>(currentLimitWatts) / static_cast<float>(totalChannels);
+    auto const requiredPower = currentPowerPerChannel * threshold;
+    for (auto const& channel : channelData) {
+        limitBoundChannels.push_back(channel.powerAC >= requiredPower);
+    }
+
+    return limitBoundChannels;
+}
+
+float calculatePerChannelLimitOutputFloat(
+        uint16_t currentLimitWatts,
+        uint16_t outputLimitWatts,
+        const std::vector<OverscalingCalculator::ChannelData>& channelData,
+        float limitBindingThreshold)
+{
+    auto const totalChannels = channelData.size();
+    if (totalChannels == 0) { return 0.0f; }
+
+    auto const limitBoundChannels =
+        collectLimitBoundChannels(currentLimitWatts, channelData, limitBindingThreshold);
+    if (limitBoundChannels.size() != totalChannels) {
+        return sumChannelPower(channelData);
+    }
+
+    auto const powerPerChannel =
+        static_cast<float>(outputLimitWatts) / static_cast<float>(totalChannels);
+    float output = 0.0f;
+    for (size_t i = 0; i < totalChannels; i++) {
+        output += limitBoundChannels[i]
+            ? powerPerChannel
+            : std::min(channelData[i].powerAC, powerPerChannel);
+    }
+
+    return std::clamp<float>(
+            output,
+            0.0f,
+            static_cast<float>(outputLimitWatts));
+}
+
+} // namespace
+
 uint16_t OverscalingCalculator::calculateOverscaledLimit(uint16_t currentLimitWatts, uint16_t newExpectedOutputWatts,
                                                         const std::vector<MpptData>& mpptData, uint16_t inverterMaxPower,
                                                         float currentThreshold, float newThreshold) {
@@ -98,6 +169,59 @@ uint16_t OverscalingCalculator::calculateOverscaledLimit(uint16_t currentLimitWa
     return (overscaledLimit > newExpectedOutputWatts) ? overscaledLimit : newExpectedOutputWatts;
 }
 
+uint16_t OverscalingCalculator::calculateOverscaledLimitForExpectedOutput(
+        uint16_t expectedOutputWatts,
+        const std::vector<MpptData>& mpptData,
+        uint16_t inverterMaxPower,
+        float threshold) {
+    const size_t totalMppts = mpptData.size();
+    if (totalMppts <= 1) {
+        return expectedOutputWatts;
+    }
+
+    const float expectedPowerPerMppt = (expectedOutputWatts / totalMppts) * threshold;
+    auto const [shadedMpptCount, shadedMpptPowerSum] =
+        countShadedMppts(mpptData, expectedPowerPerMppt);
+    if (shadedMpptCount == 0 || shadedMpptCount == totalMppts) {
+        return expectedOutputWatts;
+    }
+
+    if (shadedMpptPowerSum >= expectedOutputWatts) {
+        return expectedOutputWatts;
+    }
+
+    const size_t nonShadedMpptCount = totalMppts - shadedMpptCount;
+    const uint16_t powerPerNonShadedMppt =
+        (expectedOutputWatts - shadedMpptPowerSum) / nonShadedMpptCount;
+    uint16_t overscaledLimit = powerPerNonShadedMppt * totalMppts;
+    overscaledLimit = std::min(overscaledLimit, inverterMaxPower);
+    return (overscaledLimit > expectedOutputWatts) ? overscaledLimit : expectedOutputWatts;
+}
+
+uint16_t OverscalingCalculator::calculateMaxCompensatedOutput(
+        const std::vector<MpptData>& mpptData,
+        uint16_t inverterMaxPower,
+        float expectedPowerPerMppt) {
+    const size_t totalMppts = mpptData.size();
+    if (totalMppts <= 1 || inverterMaxPower == 0) {
+        return inverterMaxPower;
+    }
+
+    auto const [shadedMpptCount, shadedMpptPowerSum] =
+        countShadedMppts(mpptData, expectedPowerPerMppt);
+    if (shadedMpptCount == 0 || shadedMpptCount == totalMppts) {
+        return inverterMaxPower;
+    }
+
+    const size_t nonShadedMpptCount = totalMppts - shadedMpptCount;
+    auto const maxPowerPerMppt =
+        static_cast<float>(inverterMaxPower) / static_cast<float>(totalMppts);
+    auto const maxOutput =
+        shadedMpptPowerSum + (maxPowerPerMppt * nonShadedMpptCount);
+
+    return static_cast<uint16_t>(
+            std::clamp<float>(maxOutput, 0.0f, inverterMaxPower));
+}
 
 std::pair<size_t, float> OverscalingCalculator::countShadedMppts(const std::vector<MpptData>& mpptData,
                                                                 float expectedPowerPerMppt) {
@@ -113,4 +237,146 @@ std::pair<size_t, float> OverscalingCalculator::countShadedMppts(const std::vect
     }
 
     return {shadedCount, shadedPowerSum};
+}
+
+bool OverscalingCalculator::hasCompensableShading(
+        const std::vector<MpptData>& mpptData,
+        float expectedPowerPerMppt) {
+    if (mpptData.size() <= 1) {
+        return false;
+    }
+
+    auto const shaded = countShadedMppts(mpptData, expectedPowerPerMppt);
+    auto const shadedCount = shaded.first;
+
+    return shadedCount > 0 && shadedCount < mpptData.size();
+}
+
+uint16_t OverscalingCalculator::calculatePerChannelLimitOutput(
+        uint16_t currentLimitWatts,
+        uint16_t outputLimitWatts,
+        const std::vector<ChannelData>& channelData,
+        float limitBindingThreshold)
+{
+    return static_cast<uint16_t>(calculatePerChannelLimitOutputFloat(
+            currentLimitWatts,
+            outputLimitWatts,
+            channelData,
+            limitBindingThreshold));
+}
+
+uint16_t OverscalingCalculator::calculatePerChannelOverscaledLimit(
+        uint16_t currentLimitWatts,
+        uint16_t expectedOutputWatts,
+        const std::vector<ChannelData>& channelData,
+        uint16_t inverterMaxPower,
+        float limitBindingThreshold)
+{
+    if (channelData.size() <= 1 || inverterMaxPower == 0) {
+        return expectedOutputWatts;
+    }
+
+    if (!hasLimitBoundChannel(currentLimitWatts, channelData, limitBindingThreshold)) {
+        return expectedOutputWatts;
+    }
+
+    if (expectedOutputWatts >= inverterMaxPower) {
+        return inverterMaxPower;
+    }
+
+    if (calculatePerChannelLimitOutputFloat(
+                currentLimitWatts,
+                expectedOutputWatts,
+                channelData,
+                limitBindingThreshold)
+            >= static_cast<float>(expectedOutputWatts)) {
+        return expectedOutputWatts;
+    }
+
+    if (calculatePerChannelLimitOutputFloat(
+                currentLimitWatts,
+                inverterMaxPower,
+                channelData,
+                limitBindingThreshold)
+            < static_cast<float>(expectedOutputWatts)) {
+        return inverterMaxPower;
+    }
+
+    uint16_t low = expectedOutputWatts;
+    uint16_t high = inverterMaxPower;
+    while (low < high) {
+        auto const mid = static_cast<uint16_t>(
+                low + ((high - low) / 2));
+        if (calculatePerChannelLimitOutputFloat(
+                    currentLimitWatts,
+                    mid,
+                    channelData,
+                    limitBindingThreshold)
+                >= static_cast<float>(expectedOutputWatts)) {
+            high = mid;
+        } else {
+            low = mid + 1;
+        }
+    }
+
+    return low;
+}
+
+uint16_t OverscalingCalculator::calculateMaxPerChannelOutput(
+        uint16_t currentLimitWatts,
+        const std::vector<ChannelData>& channelData,
+        uint16_t inverterMaxPower,
+        float limitBindingThreshold)
+{
+    if (channelData.size() <= 1 || inverterMaxPower == 0) {
+        return inverterMaxPower;
+    }
+
+    if (!hasLimitBoundChannel(currentLimitWatts, channelData, limitBindingThreshold)) {
+        return static_cast<uint16_t>(
+                std::clamp<float>(
+                        sumChannelPower(channelData),
+                        0.0f,
+                        static_cast<float>(inverterMaxPower)));
+    }
+
+    return calculatePerChannelLimitOutput(
+            currentLimitWatts,
+            inverterMaxPower,
+            channelData,
+            limitBindingThreshold);
+}
+
+bool OverscalingCalculator::hasLimitBoundChannel(
+        uint16_t currentLimitWatts,
+        const std::vector<ChannelData>& channelData,
+        float limitBindingThreshold)
+{
+    return countLimitBoundChannels(
+            currentLimitWatts,
+            channelData,
+            limitBindingThreshold).first > 0;
+}
+
+std::pair<size_t, float> OverscalingCalculator::countLimitBoundChannels(
+        uint16_t currentLimitWatts,
+        const std::vector<ChannelData>& channelData,
+        float limitBindingThreshold)
+{
+    auto const limitBoundChannels =
+        collectLimitBoundChannels(currentLimitWatts, channelData, limitBindingThreshold);
+    if (limitBoundChannels.size() != channelData.size()) {
+        return { 0, 0.0f };
+    }
+
+    size_t boundCount = 0;
+    float boundPowerSum = 0.0f;
+    for (size_t i = 0; i < channelData.size(); i++) {
+        if (!limitBoundChannels[i]) { continue; }
+
+        boundCount++;
+        boundPowerSum += channelData[i].powerAC;
+    }
+
+    return { boundCount, boundPowerSum };
 }

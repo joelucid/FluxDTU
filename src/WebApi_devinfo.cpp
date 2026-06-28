@@ -33,7 +33,9 @@ void WebApiDevInfoClass::onDevInfoStatus(AsyncWebServerRequest* request)
         root["hw_part_number"] = inv->DevInfo()->getHwPartNumber();
         root["hw_version"] = inv->DevInfo()->getHwVersion();
         root["hw_model_name"] = inv->DevInfo()->getHwModelName();
-        root["max_power"] = inv->DevInfo()->getMaxPower();
+        root["max_power"] = inv->getMaxPower();
+        root["detected_max_power"] = inv->getDetectedMaxPower();
+        root["max_power_override"] = inv->getMaxPowerOverride();
         root["fw_build_datetime"] = inv->DevInfo()->getFwBuildDateTimeStr();
         root["pdl_supported"] = inv->supportsPowerDistributionLogic();
     }

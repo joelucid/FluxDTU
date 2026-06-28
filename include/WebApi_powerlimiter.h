@@ -11,7 +11,10 @@ public:
 
 private:
     void onStatus(AsyncWebServerRequest* request);
+    void onStatePersistenceStatus(AsyncWebServerRequest* request);
+    void onStatePersistenceDelete(AsyncWebServerRequest* request);
     void onMetaData(AsyncWebServerRequest* request);
+    void onTrace(AsyncWebServerRequest* request);
     void onAdminGet(AsyncWebServerRequest* request);
     void onAdminPost(AsyncWebServerRequest* request);
     void onFlexibleLoadEnabledPost(AsyncWebServerRequest* request);

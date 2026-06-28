@@ -5049,6 +5049,8 @@ void StatisticsClass::getStatus(
     bool daily = false;
     const char* normalizedPeriod = "today";
     const bool hasRequestedFrom = requestedFrom > 0;
+    const bool includeRequests = view == "requests";
+    uint32_t requestUpdatedFrom = 0;
 
     auto capToNow = [now](uint32_t value) {
         return value > now ? now : value;
@@ -5101,6 +5103,17 @@ void StatisticsClass::getStatus(
     } else if (hasRequestedFrom) {
         from = requestedFrom;
         to = windowEndAfterSeconds(from, 24 * 60 * 60);
+    }
+
+    if (includeRequests) {
+        normalizedPeriod = "requests";
+        from = now > PowerLimiterClass::PredictiveRequestHistorySeconds
+            ? now - PowerLimiterClass::PredictiveRequestHistorySeconds
+            : 0;
+        to = now;
+        daily = false;
+        resolution = 1;
+        requestUpdatedFrom = hasRequestedFrom ? std::max(requestedFrom, from) : from;
     }
 
     if (to < from) {
@@ -5214,6 +5227,11 @@ void StatisticsClass::getStatus(
         item["name"] = inverter.Name[0] != '\0' ? String(inverter.Name) : serial;
         item["enabled"] = inverter.Poll_Enable;
         item["order"] = inverter.Order;
+    }
+
+    if (includeRequests) {
+        PowerLimiter.addPredictiveRequestHistoryJson(root.as<JsonObject>(), requestUpdatedFrom, from, to);
+        return;
     }
 
     if (daily) {

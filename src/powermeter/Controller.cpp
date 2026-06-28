@@ -8,6 +8,7 @@
 #include <powermeter/sml/serial/Provider.h>
 #include <powermeter/smahm/udp/Provider.h>
 #include <powermeter/modbus/udp/victron/Provider.h>
+#include <PowerLimiter.h>
 
 PowerMeters::Controller PowerMeter;
 
@@ -90,14 +91,19 @@ bool Controller::isDataValid() const
 
 void Controller::loop()
 {
-    std::lock_guard<std::mutex> lock(_mutex);
-    if (!_upProvider) { return; }
-    _upProvider->loop();
+    {
+        std::lock_guard<std::mutex> lock(_mutex);
+        if (!_upProvider) { return; }
+        _upProvider->loop();
 
-    auto const& pmcfg = Configuration.get().PowerMeter;
-    // we don't need to republish data received from MQTT
-    if (pmcfg.Source == static_cast<uint8_t>(Provider::Type::MQTT)) { return; }
-    _upProvider->mqttLoop();
+        auto const& pmcfg = Configuration.get().PowerMeter;
+        // we don't need to republish data received from MQTT
+        if (pmcfg.Source != static_cast<uint8_t>(Provider::Type::MQTT)) {
+            _upProvider->mqttLoop();
+        }
+    }
+
+    PowerLimiter.updateDynamicBatteryTarget();
 }
 
 } // namespace PowerMeters

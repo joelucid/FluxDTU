@@ -10,6 +10,9 @@ export interface Inverter {
     name: string;
     type: string;
     order: number;
+    max_power: number;
+    detected_max_power: number;
+    max_power_override: number;
     poll_enable: boolean;
     poll_enable_night: boolean;
     command_enable: boolean;

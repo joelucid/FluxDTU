@@ -32,7 +32,12 @@ bool HMS_Abstract::sendChangeChannelRequest()
 
 bool HMS_Abstract::sendActivePowerControlRequest(float limit, const PowerLimitControlType type)
 {
+    bool const suppressRequestHistory = consumeSuppressNextRequestHistory();
     if (!getEnableCommands()) {
+        return false;
+    }
+
+    if (CMD_PENDING == SystemConfigPara()->getLastLimitCommandSuccess()) {
         return false;
     }
 
@@ -42,10 +47,12 @@ bool HMS_Abstract::sendActivePowerControlRequest(float limit, const PowerLimitCo
 
     _activePowerControlLimit = limit;
     _activePowerControlType = type;
+    _activePowerControlSuppressRequestHistory = suppressRequestHistory;
 
     auto cmd = _radio->prepareCommand<ActivePowerControlCommand>(this);
     cmd->setDeviceType(ActivePowerControlDeviceType::HmsActivePowerControl);
     cmd->setActivePowerLimit(limit, type);
+    cmd->setSuppressRequestHistory(_activePowerControlSuppressRequestHistory);
     SystemConfigPara()->setLastLimitCommandSuccess(CMD_PENDING);
     _radio->enqueCommand(cmd);
 

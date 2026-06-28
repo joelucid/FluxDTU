@@ -7,7 +7,9 @@ class RestartHelperClass {
 public:
     RestartHelperClass();
     void init(Scheduler& scheduler);
-    void triggerRestart();
+    void triggerRestart(char const* reason = "unspecified");
+    bool wasLastRestartRequested() const;
+    char const* getLastRestartReason() const;
 
 private:
     void loop();

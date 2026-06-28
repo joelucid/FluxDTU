@@ -2,6 +2,7 @@
 #include <Configuration.h>
 #include <MqttSettings.h>
 #include <MessageOutput.h>
+#include <gridcharger/huawei/PowerTelemetry.h>
 #include <gridcharger/huawei/Stats.h>
 
 namespace GridChargers::Huawei {
@@ -13,7 +14,20 @@ uint32_t Stats::getLastUpdate() const
 
 std::optional<float> Stats::getInputPower() const
 {
-   return _dataPoints.get<DataPointLabel::InputPower>();
+    return estimateInputPowerWatts(
+            _dataPoints.get<DataPointLabel::InputPower>(),
+            _dataPoints.get<DataPointLabel::OutputPower>(),
+            _dataPoints.get<DataPointLabel::OutputVoltage>(),
+            _dataPoints.get<DataPointLabel::OutputCurrent>(),
+            _dataPoints.get<DataPointLabel::Efficiency>());
+}
+
+std::optional<float> Stats::getOutputPower() const
+{
+    return estimateOutputPowerWatts(
+            _dataPoints.get<DataPointLabel::OutputPower>(),
+            _dataPoints.get<DataPointLabel::OutputVoltage>(),
+            _dataPoints.get<DataPointLabel::OutputCurrent>());
 }
 
 void Stats::mqttPublish() const
@@ -98,8 +112,11 @@ void Stats::getLiveViewData(JsonVariant& root) const
     auto oReachable = _dataPoints.get<DataPointLabel::Reachable>();
     root["reachable"] = oReachable.value_or(false);
 
-    auto oOutputPower = _dataPoints.get<DataPointLabel::OutputPower>();
     auto oOutputCurrent = _dataPoints.get<DataPointLabel::OutputCurrent>();
+    auto oOutputPower = estimateOutputPowerWatts(
+            _dataPoints.get<DataPointLabel::OutputPower>(),
+            _dataPoints.get<DataPointLabel::OutputVoltage>(),
+            oOutputCurrent);
     root["producing"] = oOutputPower.value_or(0) > 10 && oOutputCurrent.value_or(0) > 0.1;
 
 #define VAL(l, n) \

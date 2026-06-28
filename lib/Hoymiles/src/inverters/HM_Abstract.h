@@ -13,6 +13,7 @@ public:
     bool sendActivePowerControlRequest(float limit, const PowerLimitControlType type);
     bool resendActivePowerControlRequest();
     bool sendPowerControlRequest(const bool turnOn);
+    bool sendPowerControlRequestCompleteOnTx(const bool turnOn);
     bool sendRestartControlRequest();
     bool resendPowerControlRequest();
     bool sendGridOnProFileParaRequest();
@@ -21,8 +22,12 @@ public:
 protected:
     float _activePowerControlLimit = 0;
     PowerLimitControlType _activePowerControlType = PowerLimitControlType::AbsolutNonPersistent;
+    bool _activePowerControlSuppressRequestHistory = false;
+    bool _powerControlSuppressRequestHistory = false;
 
 private:
+    bool sendPowerControlRequest(const bool turnOn, bool completeOnTxSuccess);
+
     uint8_t _lastAlarmLogCnt = 0;
     uint8_t _powerState = 1;
 };

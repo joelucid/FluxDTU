@@ -100,6 +100,7 @@ bool HM_Abstract::sendSystemConfigParaRequest()
 
 bool HM_Abstract::sendActivePowerControlRequest(float limit, const PowerLimitControlType type)
 {
+    bool const suppressRequestHistory = consumeSuppressNextRequestHistory();
     if (!getEnableCommands()) {
         return false;
     }
@@ -114,9 +115,11 @@ bool HM_Abstract::sendActivePowerControlRequest(float limit, const PowerLimitCon
 
     _activePowerControlLimit = limit;
     _activePowerControlType = type;
+    _activePowerControlSuppressRequestHistory = suppressRequestHistory;
 
     auto cmd = _radio->prepareCommand<ActivePowerControlCommand>(this);
     cmd->setActivePowerLimit(limit, type);
+    cmd->setSuppressRequestHistory(_activePowerControlSuppressRequestHistory);
     SystemConfigPara()->setLastLimitCommandSuccess(CMD_PENDING);
     _radio->enqueCommand(cmd);
 
@@ -125,11 +128,25 @@ bool HM_Abstract::sendActivePowerControlRequest(float limit, const PowerLimitCon
 
 bool HM_Abstract::resendActivePowerControlRequest()
 {
+    if (_activePowerControlSuppressRequestHistory) {
+        suppressNextRequestHistory();
+    }
     return sendActivePowerControlRequest(_activePowerControlLimit, _activePowerControlType);
 }
 
 bool HM_Abstract::sendPowerControlRequest(const bool turnOn)
 {
+    return sendPowerControlRequest(turnOn, false);
+}
+
+bool HM_Abstract::sendPowerControlRequestCompleteOnTx(const bool turnOn)
+{
+    return sendPowerControlRequest(turnOn, true);
+}
+
+bool HM_Abstract::sendPowerControlRequest(const bool turnOn, bool completeOnTxSuccess)
+{
+    bool const suppressRequestHistory = consumeSuppressNextRequestHistory();
     if (!getEnableCommands()) {
         return false;
     }
@@ -143,9 +160,12 @@ bool HM_Abstract::sendPowerControlRequest(const bool turnOn)
     } else {
         _powerState = 0;
     }
+    _powerControlSuppressRequestHistory = suppressRequestHistory;
 
     auto cmd = _radio->prepareCommand<PowerControlCommand>(this);
     cmd->setPowerOn(turnOn);
+    cmd->setCompleteOnTxSuccess(completeOnTxSuccess);
+    cmd->setSuppressRequestHistory(_powerControlSuppressRequestHistory);
     PowerCommand()->setLastPowerCommandSuccess(CMD_PENDING);
     _radio->enqueCommand(cmd);
 
@@ -154,14 +174,17 @@ bool HM_Abstract::sendPowerControlRequest(const bool turnOn)
 
 bool HM_Abstract::sendRestartControlRequest()
 {
+    bool const suppressRequestHistory = consumeSuppressNextRequestHistory();
     if (!getEnableCommands()) {
         return false;
     }
 
     _powerState = 2;
+    _powerControlSuppressRequestHistory = suppressRequestHistory;
 
     auto cmd = _radio->prepareCommand<PowerControlCommand>(this);
     cmd->setRestart();
+    cmd->setSuppressRequestHistory(_powerControlSuppressRequestHistory);
     PowerCommand()->setLastPowerCommandSuccess(CMD_PENDING);
     _radio->enqueCommand(cmd);
 
@@ -172,12 +195,21 @@ bool HM_Abstract::resendPowerControlRequest()
 {
     switch (_powerState) {
     case 0:
+        if (_powerControlSuppressRequestHistory) {
+            suppressNextRequestHistory();
+        }
         return sendPowerControlRequest(false);
         break;
     case 1:
+        if (_powerControlSuppressRequestHistory) {
+            suppressNextRequestHistory();
+        }
         return sendPowerControlRequest(true);
         break;
     case 2:
+        if (_powerControlSuppressRequestHistory) {
+            suppressNextRequestHistory();
+        }
         return sendRestartControlRequest();
         break;
 

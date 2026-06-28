@@ -93,12 +93,18 @@ bool PowerLimiterInverter::isEligible() const
     return getEligibility() == Eligibility::Eligible;
 }
 
-bool PowerLimiterInverter::update()
+bool PowerLimiterInverter::update(bool allowNewDispatch)
 {
     auto reset = [this]() -> bool {
         _oTargetPowerState = std::nullopt;
         _oTargetPowerLimitWatts = std::nullopt;
+        _forcePowerStateCommand = false;
+        _allowParallelStartupCommands = false;
         _oUpdateStartMillis = std::nullopt;
+        _oInFlightPowerLimitWatts = std::nullopt;
+        _oInFlightPowerLimitExpectedOutputAcWatts = std::nullopt;
+        _oInFlightPowerState = std::nullopt;
+        _oInFlightPowerStateExpectedOutputAcWatts = std::nullopt;
         return false;
     };
 
@@ -116,6 +122,10 @@ bool PowerLimiterInverter::update()
             // lower power limit. the inverter becomes eligible shortly and
             // inverters whose current limit is not fetched for some reason (see
             // #1427) are "woken up".
+            if (!_oTargetPowerLimitWatts.has_value()
+                    && hasRestoredLimitPendingFeedback()) {
+                break;
+            }
             if (!_oTargetPowerLimitWatts.has_value()) {
                 DTU_LOGD("bootstrapping by setting lower power limit");
                 _oTargetPowerLimitWatts = _config.LowerPowerLimit;
@@ -152,11 +162,12 @@ bool PowerLimiterInverter::update()
         // inverter is unreachable, no matter how long (a whole night) that might be.
         if (_updateTimeouts >= 20) {
             DTU_LOGE("restarting system since inverter is unresponsive");
-            RestartHelper.triggerRestart();
+            RestartHelper.triggerRestart("power_limiter_inverter_unresponsive");
         }
         else if (_updateTimeouts >= 10) {
             DTU_LOGW("issuing restart command after update timed out or failed %d times",
                     _updateTimeouts);
+            _spInverter->suppressNextRequestHistory();
             _spInverter->sendRestartControlRequest();
         }
 
@@ -174,7 +185,14 @@ bool PowerLimiterInverter::update()
 
     auto constexpr halfOfAllMillis = std::numeric_limits<uint32_t>::max() / 2;
 
-    auto switchPowerState = [this](bool transitionOn) -> bool {
+    auto startupFromAssumedStandby = [this]() -> bool {
+        return _oTargetPowerState
+            && *_oTargetPowerState
+            && isUsingAssumedOutput()
+            && getCurrentOutputAcWatts() == 0;
+    };
+
+    auto switchPowerState = [this, allowNewDispatch, &startupFromAssumedStandby](bool transitionOn) -> bool {
         // no power state transition requested at all
         if (!_oTargetPowerState.has_value()) { return false; }
 
@@ -188,17 +206,80 @@ bool PowerLimiterInverter::update()
         }
 
         auto lastPowerCommandMillis = _spInverter->PowerCommand()->getLastUpdateCommand();
-        if (lastPowerCommandMillis > 0 && millisAtOrAfter(lastPowerCommandMillis, *_oUpdateStartMillis)) {
+        if (lastPowerCommandMillis > 0
+                && millisAtOrAfter(lastPowerCommandMillis, *_oUpdateStartMillis)
+                && _oInFlightPowerState.has_value()) {
+            auto const acknowledgedState =
+                _oInFlightPowerState.value_or(*_oTargetPowerState);
+            auto const acknowledgedExpectedOutput =
+                _oInFlightPowerStateExpectedOutputAcWatts.value_or(_expectedOutputAcWatts);
             if (CMD_OK == lastPowerCommandState) {
-                recordSuccessfulTargetCommand(lastPowerCommandMillis);
+                recordSuccessfulTargetCommand(
+                        lastPowerCommandMillis,
+                        acknowledgedExpectedOutput,
+                        false);
+                recordTargetDispatchEvent({
+                    TargetDispatchKind::PowerState,
+                    acknowledgedState ? acknowledgedExpectedOutput : static_cast<uint16_t>(0),
+                    acknowledgedExpectedOutput,
+                    lastPowerCommandMillis,
+                    acknowledgedState,
+                    true,
+                });
+            }
+
+            _oInFlightPowerState = std::nullopt;
+            _oInFlightPowerStateExpectedOutputAcWatts = std::nullopt;
+
+            if (CMD_OK == lastPowerCommandState
+                    && _oTargetPowerState
+                    && *_oTargetPowerState == acknowledgedState) {
                 _oTargetPowerState = std::nullopt;
-                return false;
+            }
+
+            if (CMD_OK == lastPowerCommandState) {
+                if (!_oTargetPowerState) { return false; }
+                _oUpdateStartMillis = millis();
+                if (transitionOn != *_oTargetPowerState) { return false; }
             }
         }
 
-        if (isProducing() != *_oTargetPowerState) {
+        bool const batteryStopStillHasEffectiveOutput =
+            isBatteryPowered()
+            && !*_oTargetPowerState
+            && (getCurrentOutputAcWatts() > 0
+                || getExpectedOutputAcWatts() > 0
+                || isUsingAssumedOutput());
+        bool const forcePowerStateCommand =
+            _forcePowerStateCommand
+            && _oTargetPowerState
+            && transitionOn == *_oTargetPowerState;
+        bool const shouldSendPowerState =
+            isProducing() != *_oTargetPowerState
+            || batteryStopStillHasEffectiveOutput
+            || forcePowerStateCommand
+            || (transitionOn && startupFromAssumedStandby());
+
+        if (shouldSendPowerState) {
+            if (!allowNewDispatch) { return true; }
+
             DTU_LOGI("%s inverter...", ((*_oTargetPowerState)?"Starting":"Stopping"));
-            _spInverter->sendPowerControlRequest(*_oTargetPowerState);
+            _spInverter->suppressNextRequestHistory();
+            if (!_spInverter->sendPowerControlRequestCompleteOnTx(*_oTargetPowerState)) {
+                DTU_LOGW("failed to queue power-state command for urgent target");
+                return true;
+            }
+
+            _oInFlightPowerState = *_oTargetPowerState;
+            _oInFlightPowerStateExpectedOutputAcWatts = _expectedOutputAcWatts;
+            recordTargetDispatchEvent({
+                TargetDispatchKind::PowerState,
+                *_oTargetPowerState ? _expectedOutputAcWatts : static_cast<uint16_t>(0),
+                _expectedOutputAcWatts,
+                0,
+                *_oTargetPowerState,
+                false,
+            });
             return true;
         }
 
@@ -208,7 +289,7 @@ bool PowerLimiterInverter::update()
 
     // we use a lambda function here to be able to use return statements,
     // which allows to avoid if-else-indentions and improves code readability
-    auto updateLimit = [this,&updateFailure]() -> bool {
+    auto updateLimit = [this, &updateFailure, allowNewDispatch]() -> bool {
         // no limit update requested at all
         if (!_oTargetPowerLimitWatts.has_value()) { return false; }
 
@@ -217,8 +298,6 @@ bool PowerLimiterInverter::update()
         if (CMD_PENDING == lastLimitCommandState) {
             return true;
         }
-
-        float newRelativeLimit = static_cast<float>(*_oTargetPowerLimitWatts * 100) / getInverterMaxPowerWatts();
 
         // if no limit command is pending, the SystemConfigPara does report the
         // current limit, as the answer by the inverter to a limit command is
@@ -229,7 +308,16 @@ bool PowerLimiterInverter::update()
         // limit command completed and if it was sent after we started the last
         // update cycle, we should assume *our* requested limit was set.
         uint32_t lastLimitCommandMillis = _spInverter->SystemConfigPara()->getLastUpdateCommand();
-        if (lastLimitCommandMillis > 0 && (lastLimitCommandMillis - *_oUpdateStartMillis) < halfOfAllMillis) {
+        if (lastLimitCommandMillis > 0
+                && (lastLimitCommandMillis - *_oUpdateStartMillis) < halfOfAllMillis
+                && _oInFlightPowerLimitWatts.has_value()) {
+            auto const acknowledgedLimit =
+                _oInFlightPowerLimitWatts.value_or(*_oTargetPowerLimitWatts);
+            auto const acknowledgedExpectedOutput =
+                _oInFlightPowerLimitExpectedOutputAcWatts.value_or(_expectedOutputAcWatts);
+            float const acknowledgedRelativeLimit =
+                static_cast<float>(acknowledgedLimit * 100) / getInverterMaxPowerWatts();
+
             DTU_LOGD("limit update %s, actual limit is %.1f %% (%.0f W "
                     "respectively), effective %d ms after update started, "
                     "requested were %.1f %%",
@@ -237,21 +325,39 @@ bool PowerLimiterInverter::update()
                     currentRelativeLimit,
                     (currentRelativeLimit * getInverterMaxPowerWatts() / 100),
                     (lastLimitCommandMillis - *_oUpdateStartMillis),
-                    newRelativeLimit);
+                    acknowledgedRelativeLimit);
 
-            auto deviation = std::abs(newRelativeLimit - currentRelativeLimit);
+            auto deviation = std::abs(acknowledgedRelativeLimit - currentRelativeLimit);
             if (CMD_OK == lastLimitCommandState && deviation > 2.0) {
                 DTU_LOGW("expected limit of %.1f %% and actual limit of "
                         "%.1f %% mismatch by more than 2 %%, is the DPL in exclusive "
                         "control over the inverter?",
-                        newRelativeLimit, currentRelativeLimit);
+                        acknowledgedRelativeLimit, currentRelativeLimit);
             }
 
             if (CMD_OK == lastLimitCommandState) {
-                recordSuccessfulTargetCommand(lastLimitCommandMillis);
+                _oRestoredLimitMillis = std::nullopt;
+                recordSuccessfulTargetCommand(
+                        lastLimitCommandMillis,
+                        acknowledgedExpectedOutput,
+                        false);
+                recordTargetDispatchEvent({
+                    TargetDispatchKind::PowerLimit,
+                    acknowledgedExpectedOutput,
+                    acknowledgedExpectedOutput,
+                    lastLimitCommandMillis,
+                    false,
+                    true,
+                });
             }
 
-            _oTargetPowerLimitWatts = std::nullopt;
+            _oInFlightPowerLimitWatts = std::nullopt;
+            _oInFlightPowerLimitExpectedOutputAcWatts = std::nullopt;
+
+            if (_oTargetPowerLimitWatts
+                    && *_oTargetPowerLimitWatts == acknowledgedLimit) {
+                _oTargetPowerLimitWatts = std::nullopt;
+            }
 
             if (CMD_OK != lastLimitCommandState) {
                 // we don't retry a failed limit command, since it might as well
@@ -260,15 +366,36 @@ bool PowerLimiterInverter::update()
                 return updateFailure();
             }
 
-            return false;
+            if (!_oTargetPowerLimitWatts) { return false; }
+
+            _oUpdateStartMillis = millis();
         }
+
+        float newRelativeLimit = static_cast<float>(*_oTargetPowerLimitWatts * 100) / getInverterMaxPowerWatts();
+
+        if (!allowNewDispatch) { return true; }
 
         DTU_LOGI("sending limit of %.1f %% (%.0f W respectively), max output is %d W",
                 newRelativeLimit, (newRelativeLimit * getInverterMaxPowerWatts() / 100),
                 getInverterMaxPowerWatts());
 
-        _spInverter->sendActivePowerControlRequest(newRelativeLimit,
-                PowerLimitControlType::RelativNonPersistent);
+        _spInverter->suppressNextRequestHistory();
+        if (!_spInverter->sendActivePowerControlRequest(newRelativeLimit,
+                    PowerLimitControlType::RelativNonPersistent)) {
+            DTU_LOGW("failed to queue limit command for %.1f %%", newRelativeLimit);
+            return true;
+        }
+
+        _oInFlightPowerLimitWatts = *_oTargetPowerLimitWatts;
+        _oInFlightPowerLimitExpectedOutputAcWatts = _expectedOutputAcWatts;
+        recordTargetDispatchEvent({
+            TargetDispatchKind::PowerLimit,
+            _expectedOutputAcWatts,
+            _expectedOutputAcWatts,
+            0,
+            false,
+            false,
+        });
 
         return true;
     };
@@ -277,21 +404,47 @@ bool PowerLimiterInverter::update()
     // setting the power limit is less important once the inverter is off.
     if (switchPowerState(false)) { return true; }
 
-    if (updateLimit()) { return true; }
+    bool const assumedStandbyStartup = startupFromAssumedStandby();
+    bool const parallelStartupAllowed =
+        assumedStandbyStartup
+        || (_allowParallelStartupCommands
+                && _oTargetPowerState
+                && *_oTargetPowerState
+                && !isProducing());
+    bool const limitPending = updateLimit();
+    if (limitPending && !parallelStartupAllowed) { return true; }
 
-    // enable power production only after setting the desired limit
+    // Enable power production only after setting the desired limit. After a
+    // standby command, stale inverter stats may still report production; do
+    // not let those stale stats satisfy a follow-up startup target.
     if (switchPowerState(true)) { return true; }
+
+    if (limitPending) { return true; }
 
     _updateTimeouts = 0;
 
     return reset();
 }
 
-bool PowerLimiterInverter::retire()
+bool PowerLimiterInverter::retire(bool allowNewDispatch)
 {
     if (!_retired) { standby(); }
     _retired = true;
-    return update();
+    return update(allowNewDispatch);
+}
+
+void PowerLimiterInverter::reassertTargetPowerState()
+{
+    if (!_oTargetPowerState) { return; }
+    _forcePowerStateCommand = true;
+}
+
+std::vector<PowerLimiterInverter::TargetDispatchEvent>
+PowerLimiterInverter::consumeTargetDispatchEvents()
+{
+    auto events = _targetDispatchEvents;
+    _targetDispatchEvents.clear();
+    return events;
 }
 
 std::optional<uint32_t> PowerLimiterInverter::getLatestStatsMillis() const
@@ -338,6 +491,10 @@ std::optional<uint32_t> PowerLimiterInverter::getOutputReferenceMillis() const
         return _oAssumedOutputValidAfterMillis;
     }
 
+    if (isUsingRestoredState()) {
+        return _oRestoredStateMillis;
+    }
+
     auto lastStatsMillis = _spInverter->Statistics()->getLastUpdate();
     if (lastStatsMillis == 0) { return std::nullopt; }
 
@@ -346,7 +503,10 @@ std::optional<uint32_t> PowerLimiterInverter::getOutputReferenceMillis() const
 
 uint16_t PowerLimiterInverter::getInverterMaxPowerWatts() const
 {
-    return _spInverter->DevInfo()->getMaxPower();
+    auto const maxPower = _spInverter->getMaxPower();
+    if (maxPower > 0) { return maxPower; }
+    if (isUsingRestoredState()) { return _restoredRuntimeState.MaxPowerWatts; }
+    return 0;
 }
 
 uint16_t PowerLimiterInverter::getConfiguredMaxPowerWatts() const
@@ -357,6 +517,7 @@ uint16_t PowerLimiterInverter::getConfiguredMaxPowerWatts() const
 uint16_t PowerLimiterInverter::getCurrentOutputAcWatts() const
 {
     if (isUsingAssumedOutput()) { return *_oAssumedOutputAcWatts; }
+    if (isUsingRestoredState()) { return _restoredRuntimeState.OutputAcWatts; }
     return getMeasuredOutputAcWatts();
 }
 
@@ -383,6 +544,10 @@ uint16_t PowerLimiterInverter::getMeasuredOutputAcWatts() const
 uint16_t PowerLimiterInverter::getExpectedOutputAcWatts() const
 {
     if (!hasPendingTarget()) {
+        if (isUsingRestoredState()) {
+            return _restoredRuntimeState.ExpectedOutputAcWatts;
+        }
+
         // the inverter's output will not change due to commands being sent
         return getCurrentOutputAcWatts();
     }
@@ -398,30 +563,144 @@ bool PowerLimiterInverter::hasStatsAtOrAfter(uint32_t timestamp) const
 
 bool PowerLimiterInverter::isUsingAssumedOutput() const
 {
-    if (!_oAssumedOutputAcWatts || !_oAssumedOutputValidAfterMillis) { return false; }
+    if (!_oAssumedOutputAcWatts) { return false; }
+    if (_keepAssumedOutput) { return true; }
+    if (!_oAssumedOutputValidAfterMillis) { return false; }
     return !hasStatsAtOrAfter(*_oAssumedOutputValidAfterMillis);
 }
 
-void PowerLimiterInverter::recordSuccessfulTargetCommand(uint32_t commandMillis)
+bool PowerLimiterInverter::hasLimitFeedbackAtOrAfter(uint32_t timestamp) const
 {
-    _oNextUpdateAttemptMillis = std::nullopt;
-    _oAssumedOutputAcWatts = _expectedOutputAcWatts;
-    _oAssumedOutputValidAfterMillis = commandMillis + _assumeTargetReachedAfterMillis;
+    auto const lastLimitFeedbackMillis =
+        _spInverter->SystemConfigPara()->getLastUpdateRequest();
+    return lastLimitFeedbackMillis > 0
+        && millisAtOrAfter(lastLimitFeedbackMillis, timestamp);
 }
 
-void PowerLimiterInverter::setMaxOutput()
+bool PowerLimiterInverter::hasRestoredLimitPendingFeedback() const
 {
+    if (!_oRestoredLimitMillis) { return false; }
+    return !hasLimitFeedbackAtOrAfter(*_oRestoredLimitMillis);
+}
+
+bool PowerLimiterInverter::isUsingRestoredLimit() const
+{
+    return hasRestoredLimitPendingFeedback();
+}
+
+bool PowerLimiterInverter::isUsingRestoredState() const
+{
+    if (!_oRestoredStateMillis) { return false; }
+    if ((millis() - *_oRestoredStateMillis) > RestoredStateAssumptionMillis) { return false; }
+    return !hasStatsAtOrAfter(*_oRestoredStateMillis);
+}
+
+bool PowerLimiterInverter::hasFreshRuntimeStateForPersistence() const
+{
+    if (isUsingRestoredState()) { return false; }
+    if (hasRestoredLimitPendingFeedback()) { return false; }
+    if (getInverterMaxPowerWatts() == 0) { return false; }
+    if (getCurrentLimitWatts() == 0) { return false; }
+    return getCurrentStatsMillis() > 0 || isUsingAssumedOutput();
+}
+
+PowerLimiterInverter::RuntimeState PowerLimiterInverter::getRuntimeStateForPersistence() const
+{
+    RuntimeState state;
+    state.Serial = getSerial();
+    state.OutputAcWatts = getCurrentOutputAcWatts();
+    state.ExpectedOutputAcWatts = getExpectedOutputAcWatts();
+    state.PowerLimitWatts = getExpectedLimitWatts();
+    state.MaxPowerWatts = getInverterMaxPowerWatts();
+    state.GridVoltage = getGridVoltage();
+    if (!std::isfinite(state.GridVoltage) || state.GridVoltage < 0.0f) {
+        state.GridVoltage = 0.0f;
+    }
+    state.Reachable = isReachable();
+    state.Producing = isProducing() || state.OutputAcWatts > 0 || state.ExpectedOutputAcWatts > 0;
+    return state;
+}
+
+void PowerLimiterInverter::restoreRuntimeState(
+        RuntimeState const& state,
+        uint32_t restoreMillis)
+{
+    if (state.Serial != getSerial()) { return; }
+    if (state.MaxPowerWatts == 0 || state.PowerLimitWatts == 0) { return; }
+
+    _restoredRuntimeState = state;
+    _oRestoredStateMillis = restoreMillis;
+    _oRestoredLimitMillis = restoreMillis;
+    _restoredRuntimeState.PowerLimitWatts = clampLimitToConfiguredBounds(
+            std::min(
+                    _restoredRuntimeState.PowerLimitWatts,
+                    _restoredRuntimeState.MaxPowerWatts));
+    _restoredRuntimeState.OutputAcWatts = std::min(
+            _restoredRuntimeState.OutputAcWatts,
+            _restoredRuntimeState.MaxPowerWatts);
+    _restoredRuntimeState.ExpectedOutputAcWatts = std::min(
+            _restoredRuntimeState.ExpectedOutputAcWatts,
+            _restoredRuntimeState.MaxPowerWatts);
+    if (_restoredRuntimeState.OutputAcWatts > 0
+            || _restoredRuntimeState.ExpectedOutputAcWatts > 0) {
+        _restoredRuntimeState.Producing = true;
+    }
+
+    // Restore is only a startup assumption. Do not mark it as a target, or
+    // update() would enqueue a fresh RF limit command for every inverter.
+    _expectedOutputAcWatts = _restoredRuntimeState.ExpectedOutputAcWatts;
+
+    DTU_LOGI("restored startup target: output %u W, expected %u W, limit %u W",
+            _restoredRuntimeState.OutputAcWatts,
+            _restoredRuntimeState.ExpectedOutputAcWatts,
+            _restoredRuntimeState.PowerLimitWatts);
+}
+
+void PowerLimiterInverter::recordSuccessfulTargetCommand(
+        uint32_t commandMillis,
+        uint16_t assumedOutputAcWatts,
+        bool keepAssumedOutput)
+{
+    _oNextUpdateAttemptMillis = std::nullopt;
+    _oRestoredStateMillis = std::nullopt;
+    _oAssumedOutputAcWatts = assumedOutputAcWatts;
+    _keepAssumedOutput = keepAssumedOutput;
+    _oAssumedOutputValidAfterMillis = commandMillis
+        + (keepAssumedOutput ? 0 : TargetEffectAssumptionMillis);
+}
+
+void PowerLimiterInverter::recordTargetDispatchEvent(TargetDispatchEvent event)
+{
+    _targetDispatchEvents.push_back(event);
+}
+
+void PowerLimiterInverter::setMaxOutput(bool fastStart)
+{
+    auto const maxOutput = getConfiguredMaxPowerWatts();
+    _allowParallelStartupCommands = fastStart;
     _oTargetPowerState = true;
-    setAcOutput(getConfiguredMaxPowerWatts());
+    setAcOutput(maxOutput);
+}
+
+uint32_t PowerLimiterInverter::getRadioQueueSize() const
+{
+    if (!_spInverter) { return 0; }
+    auto const radio = _spInverter->getRadio();
+    if (radio == nullptr) { return 0; }
+    return radio->getQueueSize();
 }
 
 bool PowerLimiterInverter::restart()
 {
+    _spInverter->suppressNextRequestHistory();
     return _spInverter->sendRestartControlRequest();
 }
 
 float PowerLimiterInverter::getGridVoltage() const
 {
+    if (isUsingRestoredState() && _restoredRuntimeState.GridVoltage >= 100.0f) {
+        return _restoredRuntimeState.GridVoltage;
+    }
     return _spInverter->Statistics()->getChannelFieldValue(TYPE_AC, CH0, FLD_UAC);
 }
 
@@ -434,7 +713,14 @@ float PowerLimiterInverter::getDcVoltage(uint8_t input)
 uint16_t PowerLimiterInverter::getCurrentLimitWatts() const
 {
     auto currentLimitPercent = _spInverter->SystemConfigPara()->getLimitPercent();
-    return static_cast<uint16_t>(currentLimitPercent * getInverterMaxPowerWatts() / 100);
+    auto const currentLimit = static_cast<uint16_t>(
+            currentLimitPercent * getInverterMaxPowerWatts() / 100);
+    if (currentLimit > 0) { return currentLimit; }
+    if (_oLastTargetPowerLimitWatts) {
+        return *_oLastTargetPowerLimitWatts;
+    }
+    if (isUsingRestoredLimit()) { return _restoredRuntimeState.PowerLimitWatts; }
+    return 0;
 }
 
 uint16_t PowerLimiterInverter::clampLimitToConfiguredBounds(uint16_t power) const
@@ -486,6 +772,7 @@ bool PowerLimiterInverter::applyConfiguredLimitBounds()
 bool PowerLimiterInverter::refreshStaleLimit()
 {
     if (!isEligible() || hasPendingTarget() || !isProducing()) { return false; }
+    if (hasRestoredLimitPendingFeedback()) { return false; }
 
     auto now = millis();
     auto lastLimitCommandMillis = _spInverter->SystemConfigPara()->getLastUpdateCommand();

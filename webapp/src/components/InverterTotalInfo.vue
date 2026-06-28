@@ -181,46 +181,16 @@
                 </h2>
             </CardElement>
         </div>
-        <div class="col" v-if="powerLimiterData.enabled && powerLimiterData.batteryTargetPowerConsumption">
-            <CardElement
-                centerContent
-                textVariant="text-bg-primary"
-                :text="
-                    $t(
-                        gridChargerData.powerLimiterManaged
-                            ? 'invertertotalinfo.StorageGridTarget'
-                            : 'invertertotalinfo.BatteryGridTarget'
-                    )
-                "
-            >
+        <div class="col" v-if="powerLimiterData.enabled && powerLimiterData.storageTargetPowerConsumption">
+            <CardElement centerContent textVariant="text-bg-primary" :text="$t('invertertotalinfo.StorageGridTarget')">
                 <h2>
                     {{
-                        $n(powerLimiterData.batteryTargetPowerConsumption.v, 'decimal', {
-                            minimumFractionDigits: powerLimiterData.batteryTargetPowerConsumption.d,
-                            maximumFractionDigits: powerLimiterData.batteryTargetPowerConsumption.d,
+                        $n(powerLimiterData.storageTargetPowerConsumption.v, 'decimal', {
+                            minimumFractionDigits: powerLimiterData.storageTargetPowerConsumption.d,
+                            maximumFractionDigits: powerLimiterData.storageTargetPowerConsumption.d,
                         })
                     }}
-                    <small class="text-muted">{{ powerLimiterData.batteryTargetPowerConsumption.u }}</small>
-                </h2>
-            </CardElement>
-        </div>
-        <div
-            class="col"
-            v-if="
-                gridChargerData.enabled &&
-                gridChargerData.targetPowerConsumption &&
-                !gridChargerData.powerLimiterManaged
-            "
-        >
-            <CardElement centerContent textVariant="text-bg-primary" :text="$t('invertertotalinfo.ChargerGridTarget')">
-                <h2>
-                    {{
-                        $n(gridChargerData.targetPowerConsumption.v, 'decimal', {
-                            minimumFractionDigits: gridChargerData.targetPowerConsumption.d,
-                            maximumFractionDigits: gridChargerData.targetPowerConsumption.d,
-                        })
-                    }}
-                    <small class="text-muted">{{ gridChargerData.targetPowerConsumption.u }}</small>
+                    <small class="text-muted">{{ powerLimiterData.storageTargetPowerConsumption.u }}</small>
                 </h2>
             </CardElement>
         </div>

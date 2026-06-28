@@ -29,10 +29,25 @@
                     <li class="nav-item">
                         <router-link @click="onClick" class="nav-link" to="/">{{ $t('menu.LiveView') }}</router-link>
                     </li>
-                    <li class="nav-item">
-                        <router-link @click="onClick" class="nav-link" to="/statistics">{{
-                            $t('menu.Statistics')
-                        }}</router-link>
+                    <li class="nav-item dropdown">
+                        <a
+                            class="nav-link dropdown-toggle"
+                            :class="{ active: isStatisticsRoute }"
+                            href="#"
+                            id="statisticsDropdown"
+                            role="button"
+                            data-bs-toggle="dropdown"
+                            aria-expanded="false"
+                        >
+                            {{ $t('menu.Statistics') }}
+                        </a>
+                        <ul class="dropdown-menu" aria-labelledby="statisticsDropdown">
+                            <li v-for="entry in statisticsMenuEntries" :key="entry.path">
+                                <router-link @click="onClick" class="dropdown-item" :to="entry.path">
+                                    {{ $t(entry.label) }}
+                                </router-link>
+                            </li>
+                        </ul>
                     </li>
                     <li class="nav-item dropdown">
                         <a
@@ -231,6 +246,7 @@
 <script lang="ts">
 import type { OperationProfilesStatus } from '@/types/OperationProfiles';
 import { authHeader, handleResponse, isLoggedIn, logout } from '@/utils/authentication';
+import { Collapse, Dropdown } from 'bootstrap';
 import { BIconEgg, BIconSun, BIconTree, BIconBatteryCharging } from 'bootstrap-icons-vue';
 import { defineComponent } from 'vue';
 import LocaleSwitcher from './LocaleSwitcher.vue';
@@ -256,6 +272,16 @@ export default defineComponent({
                 modified: false,
                 profiles: [],
             } as OperationProfilesStatus,
+            statisticsMenuEntries: [
+                { path: '/statistics/flow', label: 'statistics.PowerHistory' },
+                { path: '/statistics/loads', label: 'statistics.Loads' },
+                { path: '/statistics/panels', label: 'statistics.Panels' },
+                { path: '/statistics/battery', label: 'statistics.Battery' },
+                { path: '/statistics/temperatures', label: 'statistics.Temperatures' },
+                { path: '/statistics/boost', label: 'statistics.Boost' },
+                { path: '/statistics/requests', label: 'statistics.Requests' },
+                { path: '/statistics/powerlimiter', label: 'statistics.PowerLimiterTimeline' },
+            ],
         };
     },
     created() {
@@ -292,6 +318,9 @@ export default defineComponent({
             easterEnd.setDate(easterEnd.getDate() + 1);
             return this.now >= easterStart && this.now < easterEnd;
         },
+        isStatisticsRoute(): boolean {
+            return this.$route.path.startsWith('/statistics');
+        },
     },
     methods: {
         isLoggedIn,
@@ -308,8 +337,12 @@ export default defineComponent({
         },
         onClick() {
             if (this.$refs.navbarCollapse) {
-                (this.$refs.navbarCollapse as HTMLElement).classList.remove('show');
+                Collapse.getOrCreateInstance(this.$refs.navbarCollapse as HTMLElement, { toggle: false }).hide();
             }
+
+            document.querySelectorAll<HTMLElement>('.dropdown-toggle.show').forEach((toggle) => {
+                Dropdown.getOrCreateInstance(toggle).hide();
+            });
         },
         clearOperationProfiles() {
             this.operationProfilesStatus = {

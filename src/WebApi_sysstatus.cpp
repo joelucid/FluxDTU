@@ -6,6 +6,8 @@
 #include "Configuration.h"
 #include "NetworkSettings.h"
 #include "PinMapping.h"
+#include "ResetDiagnostics.h"
+#include "RestartHelper.h"
 #include "SerialPortManager.h"
 #include "WebApi.h"
 #include "__compiled_constants.h"
@@ -14,6 +16,7 @@
 #include <Hoymiles.h>
 #include <LittleFS.h>
 #include <ResetReason.h>
+#include <inttypes.h>
 
 void WebApiSysstatusClass::init(AsyncWebServer& server, Scheduler& scheduler)
 {
@@ -69,6 +72,11 @@ void WebApiSysstatusClass::onSystemStatus(AsyncWebServerRequest* request)
         task["name"] = task_name;
         task["stack_watermark"] = uxTaskGetStackHighWaterMark(handle);
         task["priority"] = uxTaskPriorityGet(handle);
+#if !CONFIG_FREERTOS_UNICORE && CONFIG_FREERTOS_VTASKLIST_INCLUDE_COREID
+        TaskStatus_t taskStatus;
+        vTaskGetInfo(handle, &taskStatus, pdFALSE, eInvalid);
+        task["core"] = taskStatus.xCoreID;
+#endif
     }
 
     String reason;
@@ -77,6 +85,26 @@ void WebApiSysstatusClass::onSystemStatus(AsyncWebServerRequest* request)
 
     reason = ResetReason::get_reset_reason_verbose(1);
     root["resetreason_1"] = reason;
+    root["restart_helper_requested"] = RestartHelper.wasLastRestartRequested();
+    root["restart_helper_reason"] = RestartHelper.getLastRestartReason();
+    root["last_shutdown_captured"] = ResetDiagnostics.wasLastShutdownCaptured();
+    if (ResetDiagnostics.wasLastShutdownCaptured()) {
+        ResetDiagnosticsSnapshot const& snapshot = ResetDiagnostics.getLastShutdownSnapshot();
+        JsonObject shutdown = root["last_shutdown"].to<JsonObject>();
+        shutdown["uptime_ms"] = snapshot.uptime_ms;
+        shutdown["core"] = snapshot.core_id;
+        shutdown["task"] = snapshot.task_name;
+        shutdown["heap_free"] = snapshot.heap_free;
+        shutdown["heap_min_free"] = snapshot.heap_min_free;
+        shutdown["stack_watermark"] = snapshot.stack_watermark;
+
+        JsonArray backtrace = shutdown["backtrace"].to<JsonArray>();
+        for (uint32_t i = 0; i < snapshot.backtrace_depth; ++i) {
+            char address[11];
+            snprintf(address, sizeof(address), "0x%08" PRIx32, snapshot.backtrace[i]);
+            backtrace.add(String(address));
+        }
+    }
 
     root["cfgsavecount"] = Configuration.get().Cfg.SaveCount;
 

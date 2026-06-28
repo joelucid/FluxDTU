@@ -2,12 +2,15 @@
     <BasePage
         class="statistics-page"
         :title="$t('statistics.Statistics')"
-        :isLoading="dataLoading"
+        :isLoading="dataLoading && selectedChartTab !== 'powerlimiter'"
         :isWideScreen="true"
         showReload
         @reload="reloadData"
     >
-        <div class="statistics-toolbar mb-2">
+        <div
+            v-if="selectedChartTab !== 'powerlimiter' && selectedChartTab !== 'requests'"
+            class="statistics-toolbar mb-2"
+        >
             <div class="d-flex flex-wrap gap-2" role="group">
                 <button
                     v-for="period in periods"
@@ -65,11 +68,14 @@
                 </button>
             </div>
         </div>
-        <div v-if="status" class="statistics-range-label text-muted small mb-3">
+        <div
+            v-if="selectedChartTab !== 'powerlimiter' && selectedChartTab !== 'requests' && status"
+            class="statistics-range-label text-muted small mb-3"
+        >
             {{ visibleRangeLabel }}
         </div>
 
-        <div class="row g-3 mb-3">
+        <div v-if="selectedChartTab !== 'powerlimiter' && selectedChartTab !== 'requests'" class="row g-3 mb-3">
             <div class="col-6 col-xl" v-for="card in kpiCards" :key="card.label">
                 <div class="card statistic-card h-100">
                     <div class="card-body">
@@ -324,6 +330,49 @@
                         </div>
                     </div>
                 </div>
+
+                <div
+                    v-if="selectedChartTab === 'requests'"
+                    class="chart-tab-panel chart-tab-panel-with-controls"
+                    id="statistics-requests-panel"
+                    role="tabpanel"
+                    aria-labelledby="statistics-requests-tab"
+                >
+                    <div class="request-chart-controls">
+                        <div class="form-check form-switch">
+                            <input
+                                id="statistics-requests-live"
+                                v-model="requestLiveMode"
+                                class="form-check-input"
+                                type="checkbox"
+                                role="switch"
+                                @change="onRequestLiveModeChanged"
+                            />
+                            <label class="form-check-label" for="statistics-requests-live">
+                                {{ $t('statistics.RequestsLive') }}
+                            </label>
+                        </div>
+                        <div v-if="status" class="text-muted small">
+                            {{ visibleRangeLabel }}
+                        </div>
+                    </div>
+                    <div v-if="!hasRequestRows" class="alert alert-secondary mb-0">
+                        {{ $t('statistics.RequestsNoData') }}
+                    </div>
+                    <div v-else class="chart-host request-chart-host">
+                        <canvas ref="requestChart"></canvas>
+                    </div>
+                </div>
+
+                <div
+                    v-if="selectedChartTab === 'powerlimiter'"
+                    class="chart-tab-panel"
+                    id="statistics-powerlimiter-panel"
+                    role="tabpanel"
+                    aria-labelledby="statistics-powerlimiter-tab"
+                >
+                    <PowerLimiterTracePanel :active="selectedChartTab === 'powerlimiter'" />
+                </div>
             </div>
         </div>
     </BasePage>
@@ -331,12 +380,15 @@
 
 <script lang="ts">
 import BasePage from '@/components/BasePage.vue';
+import PowerLimiterTracePanel from '@/components/PowerLimiterTracePanel.vue';
 import { BIconCalendar3, BIconChevronLeft, BIconChevronRight } from 'bootstrap-icons-vue';
 import type {
     StatisticsDay,
     StatisticsFlexibleLoad,
     StatisticsInverter,
     StatisticsPanel,
+    StatisticsRequest,
+    StatisticsRequestSection,
     StatisticsSample,
     StatisticsStatus,
     StatisticsSummary,
@@ -407,7 +459,8 @@ interface PeriodOption {
     label: string;
 }
 
-type ChartTab = 'flow' | 'panels' | 'loads' | 'temperatures' | 'boost' | 'battery';
+const ChartTabs = ['flow', 'panels', 'loads', 'temperatures', 'boost', 'battery', 'requests', 'powerlimiter'] as const;
+type ChartTab = (typeof ChartTabs)[number];
 type PanelDisplayMode = 'inverters' | 'strings';
 
 interface ChartTabOption {
@@ -453,6 +506,39 @@ interface BoostPoint {
     relaxLimited: number;
 }
 
+interface RequestChartBar {
+    x: [number, number];
+    y: string;
+    request: StatisticsRequest;
+    phase: 'queued' | 'request' | 'effect' | 'rfQueued' | 'rfInProcess';
+}
+
+interface RequestChartLaneLayout {
+    labels: string[];
+    labelByKey: Map<string, string>;
+    laneByRequestKey: Map<string, string>;
+    sectionStartIndexes: number[];
+}
+
+type RequestBarGroup =
+    | 'queued'
+    | 'success'
+    | 'superseded'
+    | 'discarded'
+    | 'failed'
+    | 'effect'
+    | 'rfQueued'
+    | 'rfInProcess'
+    | 'rfSuccess'
+    | 'rfFailed';
+type RequestStatusBarGroup = Exclude<RequestBarGroup, 'effect'>;
+type RequestBarGroups = Record<RequestBarGroup, RequestChartBar[]>;
+
+const RequestChartLaneCount = 3;
+const RequestChartLaneGapSeconds = 1;
+const RequestChartLaneStride = 1;
+const RequestStatusMarkerSeconds = 0.2;
+
 interface ManagedChart {
     destroy(): void;
     draw(): void;
@@ -462,6 +548,7 @@ interface ManagedChart {
 export default defineComponent({
     components: {
         BasePage,
+        PowerLimiterTracePanel,
         BIconCalendar3,
         BIconChevronLeft,
         BIconChevronRight,
@@ -498,12 +585,17 @@ export default defineComponent({
             rangeDragStatusApplyTimer: null as number | null,
             rangeDragPendingStatus: null as { status: StatisticsStatus; rangeStart: number } | null,
             rangeDragSession: 0,
+            requestLiveMode: true,
+            requestLiveTimer: null as number | null,
+            requestLiveInFlight: false,
+            requestLastFetchTo: 0,
             flowChart: null as ManagedChart | null,
             panelChart: null as ManagedChart | null,
             loadChart: null as ManagedChart | null,
             temperatureChart: null as ManagedChart | null,
             boostChart: null as ManagedChart | null,
             batteryChart: null as ManagedChart | null,
+            requestChart: null as ManagedChart | null,
             selectedChartTab: 'flow' as ChartTab,
             panelDisplayMode: 'inverters' as PanelDisplayMode,
             selectedPanelInverters: [] as string[],
@@ -518,6 +610,10 @@ export default defineComponent({
         };
     },
     created() {
+        this.selectedChartTab = this.chartTabFromRoute();
+        if (!this.hasValidRouteChartTab()) {
+            this.updateChartTabRoute(this.selectedChartTab, true);
+        }
         this.getData();
     },
     mounted() {
@@ -541,6 +637,7 @@ export default defineComponent({
             window.cancelAnimationFrame(this.rangeDragDrawFrame);
             this.rangeDragDrawFrame = null;
         }
+        this.clearRequestLiveTimer();
         this.rangeDragQueuedStart = null;
         this.rangeDragPendingStatus = null;
         this.destroyCharts();
@@ -595,6 +692,8 @@ export default defineComponent({
                 tabs.push({ value: 'temperatures', label: this.$t('statistics.Temperatures') });
             }
             tabs.push({ value: 'boost', label: this.$t('statistics.Boost') });
+            tabs.push({ value: 'requests', label: this.$t('statistics.Requests') });
+            tabs.push({ value: 'powerlimiter', label: this.$t('statistics.PowerLimiterTimeline') });
             return tabs;
         },
         samples(): StatisticsSample[] {
@@ -658,6 +757,46 @@ export default defineComponent({
         panels(): StatisticsPanel[] {
             return this.status?.panels || [];
         },
+        requestSections(): StatisticsRequestSection[] {
+            const sections = this.status?.request_sections || [];
+            const byKey = new Map<string, StatisticsRequestSection>();
+            sections.forEach((section) => {
+                byKey.set(section.key, section);
+            });
+            this.requests.forEach((request) => {
+                if (byKey.has(request.section_key)) {
+                    return;
+                }
+                byKey.set(request.section_key, {
+                    key: request.section_key,
+                    source: request.source,
+                    serial: request.serial,
+                    inverter_index: request.inverter_index,
+                    order: 255,
+                    enabled: true,
+                    name: request.serial || request.source,
+                });
+            });
+            return Array.from(byKey.values()).sort((left, right) => {
+                const leftSource = this.requestSourceOrder(left.source);
+                const rightSource = this.requestSourceOrder(right.source);
+                if (leftSource !== rightSource) {
+                    return leftSource - rightSource;
+                }
+                if (left.order !== right.order) {
+                    return left.order - right.order;
+                }
+                return this.requestSectionLabel(left).localeCompare(this.requestSectionLabel(right));
+            });
+        },
+        requests(): StatisticsRequest[] {
+            return (this.status?.requests || [])
+                .filter((request) => request.created > 0)
+                .sort((left, right) => left.created - right.created || left.seq - right.seq);
+        },
+        hasRequestRows(): boolean {
+            return this.requestSections.length > 0;
+        },
         panelInverterOptions(): { value: string; label: string }[] {
             const options: { value: string; label: string }[] = [];
             const seen = new Set<string>();
@@ -708,7 +847,16 @@ export default defineComponent({
             return this.panels.length > 0;
         },
         hasLoadData(): boolean {
-            return this.loadPoints.some((point) => point.other > 0 || point.flexibleValues.some((value) => value > 0));
+            const summary = this.summary;
+            const hasSummaryLoad =
+                this.summaryConsumptionWh > 0 ||
+                (summary?.flexible_load_energy_wh || 0) > 0 ||
+                (summary?.flexible_load_energies_wh || []).some((value) => value > 0);
+            return (
+                this.flexibleLoads.length > 0 ||
+                hasSummaryLoad ||
+                this.loadPoints.some((point) => point.other > 0 || point.flexibleValues.some((value) => value > 0))
+            );
         },
         hasTemperatureData(): boolean {
             return !this.isDailyPeriod && this.inverters.length > 0;
@@ -740,7 +888,6 @@ export default defineComponent({
             const summary = this.summary;
             const consumption = this.summaryConsumptionWh;
             const gridBalance = (summary?.grid_import_wh || 0) - (summary?.grid_export_wh || 0);
-            const batteryBalance = (summary?.battery_discharge_wh || 0) - (summary?.grid_charger_energy_wh || 0);
             return [
                 { label: this.$t('statistics.Consumption'), value: this.formatWh(consumption) },
                 {
@@ -750,7 +897,11 @@ export default defineComponent({
                 { label: this.$t('statistics.SolarEnergy'), value: this.formatWh(summary?.solar_energy_wh || 0) },
                 { label: this.$t('statistics.GridImport'), value: this.formatWh(summary?.grid_import_wh || 0) },
                 { label: this.$t('statistics.GridBalance'), value: this.formatSignedWh(gridBalance) },
-                { label: this.$t('statistics.BatteryBalance'), value: this.formatSignedWh(batteryBalance) },
+                {
+                    label: this.$t('statistics.BatteryDischarge'),
+                    value: this.formatWh(summary?.battery_discharge_wh || 0),
+                },
+                { label: this.$t('statistics.BatteryCharge'), value: this.formatWh(summary?.battery_charge_wh || 0) },
                 {
                     label: this.$t('statistics.GridCharger'),
                     value: this.formatWh(summary?.grid_charger_energy_wh || 0),
@@ -915,7 +1066,41 @@ export default defineComponent({
             );
         },
     },
+    watch: {
+        '$route.params.tab'() {
+            this.setChartTab(this.chartTabFromRoute(), false);
+        },
+    },
     methods: {
+        routeChartTabParam(): unknown {
+            const routeTab = this.$route.params.tab;
+            return Array.isArray(routeTab) ? routeTab[0] : routeTab;
+        },
+        isChartTab(value: unknown): value is ChartTab {
+            return typeof value === 'string' && (ChartTabs as readonly string[]).includes(value);
+        },
+        hasValidRouteChartTab(): boolean {
+            const routeTab = this.routeChartTabParam();
+            return routeTab === undefined || this.isChartTab(routeTab);
+        },
+        chartTabFromRoute(): ChartTab {
+            const routeTab = this.routeChartTabParam();
+            return this.isChartTab(routeTab) ? routeTab : 'flow';
+        },
+        chartTabPath(tab: ChartTab): string {
+            return `/statistics/${tab}`;
+        },
+        statisticsViewForTab(tab: ChartTab): ChartTab {
+            return tab === 'powerlimiter' ? 'flow' : tab;
+        },
+        updateChartTabRoute(tab: ChartTab, replace = false) {
+            const path = this.chartTabPath(tab);
+            if (this.$route.path === path || (tab === 'flow' && this.$route.path === '/statistics')) {
+                return;
+            }
+            const navigate = replace ? this.$router.replace : this.$router.push;
+            navigate.call(this.$router, path);
+        },
         statisticsCacheKey(period: string, rangeStart: number | null, view: ChartTab): string {
             return `${period}:${rangeStart === null ? 'latest' : rangeStart}:${view}`;
         },
@@ -986,13 +1171,14 @@ export default defineComponent({
             view: ChartTab,
             useCache = true
         ): Promise<StatisticsStatus> {
+            const allowCache = useCache && view !== 'requests';
             const cacheKey = this.statisticsCacheKey(period, rangeStart, view);
-            const cached = useCache ? this.statusCache[cacheKey] : undefined;
+            const cached = allowCache ? this.statusCache[cacheKey] : undefined;
             if (cached) {
                 return Promise.resolve(cached);
             }
 
-            const pending = this.pendingStatusRequests[cacheKey];
+            const pending = allowCache ? this.pendingStatusRequests[cacheKey] : undefined;
             if (pending) {
                 return pending;
             }
@@ -1009,16 +1195,24 @@ export default defineComponent({
                 .then((response) => handleResponse(response, this.$emitter, this.$router))
                 .then((data) => {
                     const status = this.normalizeStatisticsStatus(data);
-                    this.rememberStatus(period, rangeStart, view, status);
+                    if (allowCache) {
+                        this.rememberStatus(period, rangeStart, view, status);
+                    }
                     return status;
                 });
-            this.pendingStatusRequests[cacheKey] = request;
+            if (allowCache) {
+                this.pendingStatusRequests[cacheKey] = request;
+            }
             request.then(
                 () => {
-                    delete this.pendingStatusRequests[cacheKey];
+                    if (allowCache) {
+                        delete this.pendingStatusRequests[cacheKey];
+                    }
                 },
                 () => {
-                    delete this.pendingStatusRequests[cacheKey];
+                    if (allowCache) {
+                        delete this.pendingStatusRequests[cacheKey];
+                    }
                 }
             );
             return request;
@@ -1028,6 +1222,11 @@ export default defineComponent({
             this.status = status;
             this.rangeStartInput = this.dateInputFromTimestamp(status.from);
             this.customRangeStart = rangeStart === null ? null : status.from;
+            if (this.selectedChartTab === 'requests') {
+                this.requestLastFetchTo = status.to || Math.floor(Date.now() / 1000);
+            } else {
+                this.clearRequestLiveTimer();
+            }
             this.ensurePanelFilterDefaults();
             this.ensureVisibleChartTab();
             this.dataLoading = false;
@@ -1038,23 +1237,39 @@ export default defineComponent({
             if (render) {
                 this.$nextTick(() => this.renderActiveChart());
             }
-            this.scheduleAdjacentRangePrefetch(this.rangeDrag.active ? 40 : 250);
+            if (this.selectedChartTab === 'requests') {
+                this.scheduleRequestLiveRefresh();
+            } else {
+                this.scheduleAdjacentRangePrefetch(this.rangeDrag.active ? 40 : 250);
+            }
         },
         getData(options: { rangeStart?: number | null; showLoading?: boolean; useCache?: boolean } = {}) {
-            const period = this.selectedPeriod;
-            const view = this.selectedChartTab;
-            const rangeStart = options.rangeStart === undefined ? this.customRangeStart : options.rangeStart;
+            const selectedTab = this.selectedChartTab;
+            const period = selectedTab === 'requests' ? 'requests' : this.selectedPeriod;
+            const view = this.statisticsViewForTab(selectedTab);
+            const rangeStart =
+                selectedTab === 'requests'
+                    ? null
+                    : options.rangeStart === undefined
+                      ? this.customRangeStart
+                      : options.rangeStart;
             const token = ++this.requestSerial;
             if (options.showLoading ?? !this.status) {
                 this.dataLoading = true;
             }
 
-            this.fetchStatisticsStatus(period, rangeStart, view, options.useCache ?? true)
+            this.fetchStatisticsStatus(
+                period,
+                rangeStart,
+                view,
+                view === 'requests' ? false : (options.useCache ?? true)
+            )
                 .then((status) => {
+                    const currentPeriod = this.selectedChartTab === 'requests' ? 'requests' : this.selectedPeriod;
                     if (
                         token !== this.requestSerial ||
-                        period !== this.selectedPeriod ||
-                        view !== this.selectedChartTab
+                        period !== currentPeriod ||
+                        selectedTab !== this.selectedChartTab
                     ) {
                         return;
                     }
@@ -1416,13 +1631,23 @@ export default defineComponent({
             this.stopRangeDragTransport();
             this.resetRangeDragState(true);
         },
-        setChartTab(tab: ChartTab) {
+        setChartTab(tab: ChartTab, updateRoute = true) {
+            if (updateRoute) {
+                this.updateChartTabRoute(tab);
+            }
             if (this.selectedChartTab === tab) {
                 return;
             }
+            this.cancelRangeDrag();
             this.destroyCharts();
+            this.clearRequestLiveTimer();
             this.selectedChartTab = tab;
-            this.getData({ showLoading: false });
+            if (tab === 'powerlimiter') {
+                this.dataLoading = false;
+                this.getData({ showLoading: false });
+                return;
+            }
+            this.getData({ showLoading: tab === 'requests', useCache: tab !== 'requests' });
         },
         onPanelSelectionChanged() {
             const validValues = new Set(this.panelInverterOptions.map((option) => option.value));
@@ -1435,6 +1660,7 @@ export default defineComponent({
         ensureVisibleChartTab() {
             if (!this.chartTabs.some((tab) => tab.value === this.selectedChartTab)) {
                 this.selectedChartTab = 'flow';
+                this.updateChartTabRoute(this.selectedChartTab, true);
             }
         },
         ensurePanelFilterDefaults() {
@@ -1455,7 +1681,7 @@ export default defineComponent({
             this.panelFilterInitialized = true;
         },
         scheduleAdjacentRangePrefetch(delay = 250) {
-            if (this.rangeDragEnding) {
+            if (this.rangeDragEnding || this.selectedChartTab === 'requests') {
                 return;
             }
 
@@ -1506,7 +1732,13 @@ export default defineComponent({
                 });
         },
         prefetchAdjacentRanges() {
-            if (!this.status || this.dataLoading || this.prefetchInFlight || this.rangeDragEnding) {
+            if (
+                this.selectedChartTab === 'powerlimiter' ||
+                !this.status ||
+                this.dataLoading ||
+                this.prefetchInFlight ||
+                this.rangeDragEnding
+            ) {
                 return;
             }
 
@@ -1725,6 +1957,12 @@ export default defineComponent({
             if (this.selectedChartTab === 'boost') {
                 return this.boostChart;
             }
+            if (this.selectedChartTab === 'requests') {
+                return this.requestChart;
+            }
+            if (this.selectedChartTab === 'powerlimiter') {
+                return null;
+            }
             return this.batteryChart;
         },
         rangeDragOffsetPixels(): number {
@@ -1756,11 +1994,413 @@ export default defineComponent({
                 this.updateActiveChartDragOffset();
             });
         },
+        clearRequestLiveTimer() {
+            if (this.requestLiveTimer !== null) {
+                window.clearTimeout(this.requestLiveTimer);
+                this.requestLiveTimer = null;
+            }
+        },
+        scheduleRequestLiveRefresh() {
+            this.clearRequestLiveTimer();
+            if (this.selectedChartTab !== 'requests' || !this.requestLiveMode) {
+                return;
+            }
+
+            this.requestLiveTimer = window.setTimeout(() => {
+                this.requestLiveTimer = null;
+                this.refreshRequestLiveData();
+            }, 1000);
+        },
+        refreshRequestLiveData() {
+            if (this.selectedChartTab !== 'requests' || !this.requestLiveMode || this.requestLiveInFlight) {
+                this.scheduleRequestLiveRefresh();
+                return;
+            }
+
+            const since = Math.max(
+                0,
+                (this.requestLastFetchTo || this.status?.to || Math.floor(Date.now() / 1000)) - 1
+            );
+            this.requestLiveInFlight = true;
+            this.fetchStatisticsStatus('requests', since, 'requests', false)
+                .then((update) => {
+                    if (this.selectedChartTab !== 'requests') {
+                        return;
+                    }
+                    this.mergeRequestStatus(update);
+                })
+                .catch(() => undefined)
+                .then(() => {
+                    this.requestLiveInFlight = false;
+                    this.scheduleRequestLiveRefresh();
+                });
+        },
+        mergeRequestStatus(update: StatisticsStatus) {
+            if (!this.status || this.selectedChartTab !== 'requests') {
+                this.applyStatus(update, null);
+                return;
+            }
+
+            const sectionMap = new Map<string, StatisticsRequestSection>();
+            (this.status.request_sections || []).forEach((section) => sectionMap.set(section.key, section));
+            (update.request_sections || []).forEach((section) => sectionMap.set(section.key, section));
+
+            const requestMap = new Map<string, StatisticsRequest>();
+            (this.status.requests || []).forEach((request) => requestMap.set(this.requestKey(request), request));
+            (update.requests || []).forEach((request) => {
+                const key = this.requestKey(request);
+                const existing = requestMap.get(key);
+                if (!existing || (request.updated || 0) >= (existing.updated || 0)) {
+                    requestMap.set(key, request);
+                }
+            });
+
+            const from = update.from;
+            const to = update.to;
+            const requests = Array.from(requestMap.values()).filter((request) =>
+                this.requestVisible(request, from, to)
+            );
+
+            this.status = {
+                ...this.status,
+                ...update,
+                request_sections: Array.from(sectionMap.values()),
+                requests,
+            };
+            this.requestLastFetchTo = update.to || this.requestLastFetchTo;
+            this.dataLoading = false;
+            this.$nextTick(() => this.renderRequestChart());
+        },
+        onRequestLiveModeChanged() {
+            if (this.requestLiveMode) {
+                this.scheduleRequestLiveRefresh();
+            } else {
+                this.clearRequestLiveTimer();
+            }
+        },
+        requestKey(request: StatisticsRequest): string {
+            return request.key || `${request.seq}:${request.section_key}`;
+        },
+        requestSourceOrder(source: string): number {
+            const order: Record<string, number> = {
+                battery: 0,
+                solar: 1,
+                smart_buffer: 2,
+                grid_charger: 3,
+            };
+            return order[source] ?? 4;
+        },
+        requestSourceLabel(source: string): string {
+            const labels: Record<string, string> = {
+                battery: this.$t('statistics.RequestSourceBattery'),
+                solar: this.$t('statistics.RequestSourceSolar'),
+                smart_buffer: this.$t('statistics.RequestSourceSmartBuffer'),
+                grid_charger: this.$t('statistics.RequestSourceGridCharger'),
+            };
+            return labels[source] || source;
+        },
+        requestSectionLabel(section: StatisticsRequestSection): string {
+            if (section.source === 'grid_charger') {
+                return this.requestSourceLabel(section.source);
+            }
+            return `${this.requestSourceLabel(section.source)} / ${section.name || section.serial || '-'}`;
+        },
+        requestStatusLabel(status: string): string {
+            const labels: Record<string, string> = {
+                queued: this.$t('statistics.RequestStatusQueued'),
+                sent: this.$t('statistics.RequestStatusSent'),
+                accepted: this.$t('statistics.RequestStatusAccepted'),
+                superseded_before_send: this.$t('statistics.RequestStatusSuperseded'),
+                rejected: this.$t('statistics.RequestStatusRejected'),
+                failed_no_effect: this.$t('statistics.RequestStatusFailedNoEffect'),
+                failed_ambiguous: this.$t('statistics.RequestStatusFailedAmbiguous'),
+                settled_by_meter: this.$t('statistics.RequestStatusSuccess'),
+                settled_by_telemetry: this.$t('statistics.RequestStatusSuccess'),
+                settled_by_timeout: this.$t('statistics.RequestStatusSuccess'),
+                settled_superseded: this.$t('statistics.RequestStatusSuperseded'),
+                settled_discarded: this.$t('statistics.RequestStatusDiscarded'),
+                rf_queued: this.$t('statistics.RequestStatusRfQueued'),
+                rf_in_process: this.$t('statistics.RequestStatusRfInProcess'),
+                rf_success: this.$t('statistics.RequestStatusRfSuccess'),
+                rf_failed: this.$t('statistics.RequestStatusRfFailed'),
+            };
+            return labels[status] || status;
+        },
+        isRfRequest(request: StatisticsRequest): boolean {
+            return request.status.startsWith('rf_');
+        },
+        requestStatusGroup(status: string): RequestStatusBarGroup {
+            if (status === 'queued') {
+                return 'queued';
+            }
+            if (status.includes('superseded')) {
+                return 'superseded';
+            }
+            if (status === 'settled_discarded') {
+                return 'discarded';
+            }
+            if (status.startsWith('failed') || status === 'rejected') {
+                return 'failed';
+            }
+            return 'success';
+        },
+        requestBarPhaseLabel(bar: RequestChartBar): string {
+            if (bar.phase === 'queued') {
+                return this.$t('statistics.RequestStatusQueued');
+            }
+            if (bar.phase === 'rfQueued') {
+                return this.$t('statistics.RequestStatusRfQueued');
+            }
+            if (bar.phase === 'rfInProcess') {
+                return this.$t('statistics.RequestStatusRfInProcess');
+            }
+            if (bar.phase === 'effect') {
+                return this.$t('statistics.RequestEffectPending');
+            }
+            return this.requestStatusLabel(bar.request.status);
+        },
+        requestDispatchTimestamp(request: StatisticsRequest): number {
+            if (request.sent && request.sent > 0) {
+                return request.sent;
+            }
+            if (request.ack && request.ack > 0) {
+                return request.ack;
+            }
+            return 0;
+        },
+        requestQueueEndTimestamp(request: StatisticsRequest): number {
+            const dispatch = this.requestDispatchTimestamp(request);
+            if (dispatch > 0) {
+                return dispatch;
+            }
+            if (this.requestStatusGroup(request.status) !== 'queued') {
+                return request.updated || request.created;
+            }
+            if (request.dispatch_pending) {
+                return request.updated || request.created;
+            }
+            return this.status?.to || Math.floor(Date.now() / 1000);
+        },
+        requestEndTimestamp(request: StatisticsRequest): number {
+            if (this.requestStatusGroup(request.status) === 'queued') {
+                return this.requestQueueEndTimestamp(request);
+            }
+            return this.requestDispatchTimestamp(request) || request.updated || request.created;
+        },
+        requestEffectStartTimestamp(request: StatisticsRequest): number {
+            return request.not_before_effect || request.ack || request.sent || 0;
+        },
+        requestEffectEndTimestamp(request: StatisticsRequest): number {
+            return request.latest_effect || request.typical_effect || request.earliest_expected || 0;
+        },
+        rfRequestEndTimestamp(request: StatisticsRequest): number {
+            if (request.status === 'rf_queued' || request.status === 'rf_in_process') {
+                return this.status?.to || Math.floor(Date.now() / 1000);
+            }
+            return Math.max(request.updated || 0, request.sent || 0, request.created) + 1;
+        },
+        requestTimelineEndTimestamp(request: StatisticsRequest): number {
+            if (this.isRfRequest(request)) {
+                return Math.max(this.rfRequestEndTimestamp(request), request.created + 1);
+            }
+            const queueEnd = this.requestQueueEndTimestamp(request);
+            const requestEnd = this.requestEndTimestamp(request);
+            const statusEnd =
+                this.requestStatusGroup(request.status) === 'queued' ? queueEnd : Math.max(requestEnd, queueEnd + 1);
+            return Math.max(queueEnd, statusEnd, this.requestEffectEndTimestamp(request), request.created + 1);
+        },
+        requestVisible(request: StatisticsRequest, from: number, to: number): boolean {
+            if (this.isRfRequest(request)) {
+                return request.created <= to && this.rfRequestEndTimestamp(request) >= from;
+            }
+            const effectEnd = this.requestEffectEndTimestamp(request);
+            const end = Math.max(this.requestEndTimestamp(request), effectEnd, request.updated || 0);
+            return request.created <= to && end >= from;
+        },
+        requestLaneKey(sectionKey: string, lane: number): string {
+            return `${sectionKey}:lane:${lane}`;
+        },
+        requestLaneLayout(): RequestChartLaneLayout {
+            const labels: string[] = [];
+            const labelByKey = new Map<string, string>();
+            const laneByRequestKey = new Map<string, string>();
+            const sectionStartIndexes: number[] = [];
+            const laneEndsBySection = new Map<string, number[]>();
+            const sectionLabelByKey = new Map<string, string>();
+
+            this.requestSections.forEach((section) => {
+                sectionLabelByKey.set(section.key, this.requestSectionLabel(section));
+                laneEndsBySection.set(section.key, Array(RequestChartLaneCount).fill(0));
+            });
+
+            this.requests.forEach((request) => {
+                const laneEnds = laneEndsBySection.get(request.section_key);
+                if (!laneEnds) {
+                    return;
+                }
+                let lane = laneEnds.findIndex((end) => end <= request.created);
+                if (lane < 0) {
+                    lane = laneEnds.length;
+                    laneEnds.push(0);
+                }
+
+                const displayLane = lane * RequestChartLaneStride;
+                laneByRequestKey.set(this.requestKey(request), this.requestLaneKey(request.section_key, displayLane));
+                laneEnds[lane] = Math.max(
+                    laneEnds[lane] ?? 0,
+                    this.requestTimelineEndTimestamp(request) + RequestChartLaneGapSeconds
+                );
+            });
+
+            this.requestSections.forEach((section) => {
+                if (labels.length > 0) {
+                    sectionStartIndexes.push(labels.length);
+                }
+                const sectionLabel = sectionLabelByKey.get(section.key) || this.requestSectionLabel(section);
+                const laneEnds = laneEndsBySection.get(section.key) || [];
+                const visibleLaneCount = Math.max(
+                    RequestChartLaneCount,
+                    laneEnds.length > 0 ? (laneEnds.length - 1) * RequestChartLaneStride + 1 : RequestChartLaneCount
+                );
+                for (let lane = 0; lane < visibleLaneCount; lane++) {
+                    const key = this.requestLaneKey(section.key, lane);
+                    labels.push(key);
+                    labelByKey.set(key, sectionLabel);
+                }
+            });
+
+            return { labels, labelByKey, laneByRequestKey, sectionStartIndexes };
+        },
+        clippedRequestBar(
+            start: number,
+            end: number,
+            row: string,
+            request: StatisticsRequest,
+            phase: 'queued' | 'request' | 'effect' | 'rfQueued' | 'rfInProcess',
+            minDurationSeconds = 1
+        ) {
+            const status = this.status;
+            if (!status) {
+                return null;
+            }
+            const clippedStart = Math.max(status.from, start);
+            const clippedEnd = Math.min(status.to, Math.max(end, start + minDurationSeconds));
+            if (clippedEnd <= status.from || clippedStart >= status.to || clippedEnd <= clippedStart) {
+                return null;
+            }
+            return {
+                x: [clippedStart, clippedEnd] as [number, number],
+                y: row,
+                request,
+                phase,
+            };
+        },
+        addRfRequestBars(groups: RequestBarGroups, row: string, request: StatisticsRequest) {
+            const now = this.status?.to || Math.floor(Date.now() / 1000);
+            const sent = request.sent && request.sent > 0 ? request.sent : 0;
+            const updated = request.updated && request.updated > 0 ? request.updated : 0;
+
+            if (request.status === 'rf_queued') {
+                const queuedBar = this.clippedRequestBar(request.created, now, row, request, 'rfQueued');
+                if (queuedBar) {
+                    groups.rfQueued.push(queuedBar);
+                }
+                return;
+            }
+
+            const queueEnd = sent > 0 ? sent : Math.max(request.created, updated || request.created);
+            if (queueEnd > request.created) {
+                const queuedBar = this.clippedRequestBar(request.created, queueEnd, row, request, 'rfQueued');
+                if (queuedBar) {
+                    groups.rfQueued.push(queuedBar);
+                }
+            }
+
+            if (request.status === 'rf_in_process') {
+                const inProcessBar = this.clippedRequestBar(queueEnd, now, row, request, 'rfInProcess');
+                if (inProcessBar) {
+                    groups.rfInProcess.push(inProcessBar);
+                }
+                return;
+            }
+
+            const terminal = Math.max(updated, queueEnd, request.created);
+            if (terminal > queueEnd) {
+                const inProcessBar = this.clippedRequestBar(queueEnd, terminal, row, request, 'rfInProcess');
+                if (inProcessBar) {
+                    groups.rfInProcess.push(inProcessBar);
+                }
+            }
+
+            const group = request.status === 'rf_failed' ? 'rfFailed' : 'rfSuccess';
+            const terminalBar = this.clippedRequestBar(terminal, terminal + 1, row, request, 'request');
+            if (terminalBar) {
+                groups[group].push(terminalBar);
+            }
+        },
+        requestChartBars(laneLayout: RequestChartLaneLayout): RequestBarGroups {
+            const groups: RequestBarGroups = {
+                queued: [],
+                success: [],
+                superseded: [],
+                discarded: [],
+                failed: [],
+                effect: [],
+                rfQueued: [],
+                rfInProcess: [],
+                rfSuccess: [],
+                rfFailed: [],
+            };
+            this.requests.forEach((request) => {
+                const row =
+                    laneLayout.laneByRequestKey.get(this.requestKey(request)) ||
+                    this.requestLaneKey(request.section_key, 0);
+                if (this.isRfRequest(request)) {
+                    this.addRfRequestBars(groups, row, request);
+                    return;
+                }
+
+                const queueEnd = this.requestQueueEndTimestamp(request);
+                const requestEnd = this.requestEndTimestamp(request);
+                const group = this.requestStatusGroup(request.status);
+                if (queueEnd > request.created) {
+                    const queueBar = this.clippedRequestBar(request.created, queueEnd, row, request, 'queued');
+                    if (queueBar) {
+                        groups.queued.push(queueBar);
+                    }
+                }
+
+                if (group !== 'queued') {
+                    const statusEnd = Math.max(requestEnd, queueEnd + RequestStatusMarkerSeconds);
+                    const requestBar = this.clippedRequestBar(
+                        queueEnd,
+                        statusEnd,
+                        row,
+                        request,
+                        'request',
+                        RequestStatusMarkerSeconds
+                    );
+                    if (requestBar) {
+                        groups[group].push(requestBar);
+                    }
+                }
+
+                const effectStart = this.requestEffectStartTimestamp(request);
+                const effectEnd = this.requestEffectEndTimestamp(request);
+                if (effectStart > 0 && effectEnd > effectStart) {
+                    const effectBar = this.clippedRequestBar(effectStart, effectEnd, row, request, 'effect');
+                    if (effectBar) {
+                        groups.effect.push(effectBar);
+                    }
+                }
+            });
+            return groups;
+        },
         renderCharts() {
             this.renderActiveChart();
         },
         renderActiveChart() {
-            if (!this.status) {
+            if (this.selectedChartTab === 'powerlimiter' || !this.status) {
                 return;
             }
 
@@ -1774,6 +2414,8 @@ export default defineComponent({
                 this.renderTemperatureChart();
             } else if (this.selectedChartTab === 'boost') {
                 this.renderBoostChart();
+            } else if (this.selectedChartTab === 'requests') {
+                this.renderRequestChart();
             } else {
                 this.renderBatteryChart();
             }
@@ -1781,6 +2423,10 @@ export default defineComponent({
             this.resizeActiveChartAfterLayout();
         },
         resizeActiveChartAfterLayout() {
+            if (this.selectedChartTab === 'powerlimiter') {
+                return;
+            }
+
             window.requestAnimationFrame(() => {
                 window.requestAnimationFrame(() => {
                     if (this.selectedChartTab === 'flow') {
@@ -1793,11 +2439,223 @@ export default defineComponent({
                         this.temperatureChart?.resize();
                     } else if (this.selectedChartTab === 'boost') {
                         this.boostChart?.resize();
+                    } else if (this.selectedChartTab === 'requests') {
+                        this.requestChart?.resize();
                     } else {
                         this.batteryChart?.resize();
                     }
                 });
             });
+        },
+        renderRequestChart() {
+            const canvas = this.$refs.requestChart as HTMLCanvasElement | undefined;
+            if (!canvas || !this.status || !this.hasRequestRows) {
+                this.requestChart?.destroy();
+                this.requestChart = null;
+                return;
+            }
+
+            const laneLayout = this.requestLaneLayout();
+            const labels = laneLayout.labels;
+            const labelByKey = laneLayout.labelByKey;
+            const sectionStartIndexes = laneLayout.sectionStartIndexes;
+            const bars = this.requestChartBars(laneLayout);
+            const requestSectionSeparatorPlugin: Plugin<'bar'> = {
+                id: 'requestSectionSeparators',
+                beforeDatasetsDraw(chart) {
+                    const yScale = chart.scales.y;
+                    if (!yScale) {
+                        return;
+                    }
+
+                    const { ctx, chartArea } = chart;
+                    ctx.save();
+                    ctx.strokeStyle = 'rgba(108, 117, 125, 0.26)';
+                    ctx.lineWidth = 1;
+                    sectionStartIndexes.forEach((index) => {
+                        if (index <= 0 || index >= labels.length) {
+                            return;
+                        }
+
+                        const previousPixel = yScale.getPixelForTick(index - 1);
+                        const currentPixel = yScale.getPixelForTick(index);
+                        if (!Number.isFinite(previousPixel) || !Number.isFinite(currentPixel)) {
+                            return;
+                        }
+
+                        const y = Math.round((previousPixel + currentPixel) / 2) + 0.5;
+                        ctx.beginPath();
+                        ctx.moveTo(chartArea.left, y);
+                        ctx.lineTo(chartArea.right, y);
+                        ctx.stroke();
+                    });
+                    ctx.restore();
+                },
+            };
+            const dataset = (
+                key: RequestBarGroup,
+                label: string,
+                backgroundColor: string,
+                borderColor: string,
+                order = 0
+            ): ChartDataset<'bar', RequestChartBar[]> => ({
+                type: 'bar',
+                label,
+                data: bars[key],
+                order,
+                backgroundColor,
+                borderColor,
+                borderWidth: 1,
+                borderSkipped: false,
+                grouped: false,
+                barPercentage: 0.82,
+                categoryPercentage: 0.94,
+                parsing: {
+                    xAxisKey: 'x',
+                    yAxisKey: 'y',
+                },
+            });
+            const datasets: ChartDataset<'bar', RequestChartBar[]>[] = [
+                dataset('queued', this.$t('statistics.RequestStatusQueued'), 'rgba(255, 193, 7, 0.72)', '#c99700'),
+                dataset('success', this.$t('statistics.RequestStatusSuccess'), 'rgba(25, 135, 84, 0.62)', '#198754'),
+                dataset(
+                    'superseded',
+                    this.$t('statistics.RequestStatusSuperseded'),
+                    'rgba(108, 117, 125, 0.58)',
+                    '#6c757d'
+                ),
+                dataset(
+                    'discarded',
+                    this.$t('statistics.RequestStatusDiscarded'),
+                    'rgba(173, 181, 189, 0.52)',
+                    '#6c757d'
+                ),
+                dataset('failed', this.$t('statistics.RequestStatusFailed'), 'rgba(220, 53, 69, 0.64)', '#dc3545'),
+                dataset(
+                    'effect',
+                    this.$t('statistics.RequestEffectPending'),
+                    'rgba(13, 110, 253, 0.34)',
+                    '#0d6efd',
+                    10
+                ),
+                dataset(
+                    'rfQueued',
+                    this.$t('statistics.RequestStatusRfQueued'),
+                    'rgba(255, 229, 153, 0.72)',
+                    '#d6a800'
+                ),
+                dataset(
+                    'rfInProcess',
+                    this.$t('statistics.RequestStatusRfInProcess'),
+                    'rgba(141, 196, 255, 0.52)',
+                    '#6ea8fe'
+                ),
+                dataset(
+                    'rfSuccess',
+                    this.$t('statistics.RequestStatusRfSuccess'),
+                    'rgba(171, 229, 203, 0.62)',
+                    '#75b798'
+                ),
+                dataset(
+                    'rfFailed',
+                    this.$t('statistics.RequestStatusRfFailed'),
+                    'rgba(248, 190, 199, 0.66)',
+                    '#ea868f'
+                ),
+            ];
+
+            const config: ChartConfiguration<'bar', RequestChartBar[], string> = {
+                type: 'bar',
+                plugins: [requestSectionSeparatorPlugin],
+                data: {
+                    labels,
+                    datasets,
+                },
+                options: {
+                    animation: false,
+                    maintainAspectRatio: false,
+                    responsive: true,
+                    indexAxis: 'y',
+                    interaction: {
+                        intersect: false,
+                        mode: 'nearest',
+                    },
+                    plugins: {
+                        legend: {
+                            display: true,
+                            position: 'top',
+                            labels: {
+                                boxWidth: 12,
+                                usePointStyle: true,
+                            },
+                        },
+                        tooltip: {
+                            callbacks: {
+                                title: (items) => {
+                                    const raw = items[0]?.raw as RequestChartBar | undefined;
+                                    return raw ? labelByKey.get(raw.y) || raw.y : '';
+                                },
+                                label: (context: TooltipItem<'bar'>) => {
+                                    const raw = context.raw as RequestChartBar | undefined;
+                                    if (!raw) {
+                                        return '';
+                                    }
+                                    const request = raw.request;
+                                    const lines = [
+                                        `${this.requestBarPhaseLabel(raw)}: ${this.formatTooltipTime(raw.x[0])} - ${this.formatTooltipTime(raw.x[1])}`,
+                                    ];
+                                    if (request.command) {
+                                        lines.push(`${this.$t('statistics.RequestCommand')}: ${request.command}`);
+                                    } else {
+                                        lines.push(
+                                            `${this.$t('statistics.RequestTarget')}: ${this.formatWatt(request.target_w)} (${this.formatSignedWatt(request.delta_w)})`
+                                        );
+                                    }
+                                    lines.push(
+                                        `${this.$t('statistics.RequestStatus')}: ${this.requestStatusLabel(request.status)}`
+                                    );
+                                    return lines;
+                                },
+                            },
+                        },
+                    },
+                    scales: {
+                        x: {
+                            type: 'linear',
+                            min: this.status.from,
+                            max: this.status.to,
+                            grid: {
+                                display: true,
+                            },
+                            ticks: {
+                                maxTicksLimit: 6,
+                                callback: (value) => this.formatAxisTime(Number(value)),
+                            },
+                        },
+                        y: {
+                            type: 'category',
+                            labels,
+                            grid: {
+                                display: false,
+                            },
+                            ticks: {
+                                autoSkip: false,
+                                callback: (value) => {
+                                    const index = Number(value);
+                                    const key = Number.isInteger(index) ? labels[index] : String(value);
+                                    if (key && !key.endsWith(':lane:0')) {
+                                        return '';
+                                    }
+                                    return key ? labelByKey.get(key) || key : '';
+                                },
+                            },
+                        },
+                    },
+                },
+            };
+
+            this.requestChart?.destroy();
+            this.requestChart = new ChartJS(canvas, config);
         },
         renderFlowChart() {
             const canvas = this.$refs.flowChart as HTMLCanvasElement | undefined;
@@ -2529,7 +3387,7 @@ export default defineComponent({
                         },
                         y: {
                             min: 0,
-                            max: 100,
+                            max: 101,
                             title: {
                                 display: true,
                                 text: 'SoC (%)',
@@ -2552,12 +3410,14 @@ export default defineComponent({
             this.temperatureChart?.destroy();
             this.boostChart?.destroy();
             this.batteryChart?.destroy();
+            this.requestChart?.destroy();
             this.flowChart = null;
             this.panelChart = null;
             this.loadChart = null;
             this.temperatureChart = null;
             this.boostChart = null;
             this.batteryChart = null;
+            this.requestChart = null;
         },
         sumPositive(values: number[]): number {
             return values.reduce((sum, value) => sum + Math.max(0, value || 0), 0);
@@ -2615,14 +3475,9 @@ export default defineComponent({
                 }).format(date);
             }
 
-            if (this.selectedPeriod === '7d') {
-                return new Intl.DateTimeFormat(undefined, {
-                    weekday: 'short',
-                    hour: '2-digit',
-                }).format(date);
-            }
-
             return new Intl.DateTimeFormat(undefined, {
+                day: '2-digit',
+                month: '2-digit',
                 hour: '2-digit',
                 minute: '2-digit',
             }).format(date);
@@ -2633,6 +3488,7 @@ export default defineComponent({
                 month: '2-digit',
                 hour: '2-digit',
                 minute: '2-digit',
+                second: '2-digit',
             }).format(new Date(timestamp * 1000));
         },
         formatWh(value: number): string {
@@ -2647,6 +3503,10 @@ export default defineComponent({
         },
         formatWatt(value: number): string {
             return `${this.$n(value, 'decimalNoDigits')} W`;
+        },
+        formatSignedWatt(value: number): string {
+            const formatted = this.formatWatt(value);
+            return value > 0 ? `+${formatted}` : formatted;
         },
         formatDuration(seconds: number): string {
             if (seconds >= 3600) {
@@ -2754,6 +3614,14 @@ export default defineComponent({
     gap: 0.5rem;
 }
 
+.request-chart-controls {
+    align-items: center;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.75rem;
+    justify-content: space-between;
+}
+
 .panel-mode-toggle {
     flex: 0 0 auto;
 }
@@ -2785,6 +3653,12 @@ export default defineComponent({
 
 .chart-host-dragging {
     cursor: grabbing;
+}
+
+.request-chart-host {
+    cursor: default;
+    min-block-size: 24rem;
+    touch-action: pan-y;
 }
 
 :global(html.statistics-range-dragging),

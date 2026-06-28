@@ -21,6 +21,7 @@
 #include <Arduino.h>
 #include <algorithm>
 #include <esp_log.h>
+#include <vector>
 
 #undef TAG
 static const char* TAG = "hoymiles";
@@ -166,28 +167,83 @@ bool HoymilesClass::pollInverter(std::shared_ptr<InverterAbstract> iv)
 
     ESP_LOGI(TAG, "Fetch inverter: %s", iv->serialString().c_str());
 
-    if (!iv->isReachable()) {
+    struct LowPriorityPollBackoff {
+        uint64_t serial = 0;
+        uint32_t lastAlarmLogRequestMillis = 0;
+        uint32_t lastGridProfileRequestMillis = 0;
+    };
+    static std::vector<LowPriorityPollBackoff> lowPriorityPollBackoffs;
+    auto backoff = std::find_if(lowPriorityPollBackoffs.begin(), lowPriorityPollBackoffs.end(),
+            [&](auto const& entry) { return entry.serial == iv->serial(); });
+    if (backoff == lowPriorityPollBackoffs.end()) {
+        lowPriorityPollBackoffs.push_back({ iv->serial(), 0, 0 });
+        backoff = lowPriorityPollBackoffs.end() - 1;
+    }
+    auto const now = millis();
+    auto const isBackoffElapsed = [now](uint32_t lastAttempt, uint32_t interval) {
+        return lastAttempt == 0 || now - lastAttempt >= interval;
+    };
+
+    bool pollThrottled = false;
+    bool const throttleUnreachablePolls = !iv->isReachable();
+    auto canEnqueuePollRequest = [&iv, &pollThrottled, throttleUnreachablePolls](uint32_t slots = 1) -> bool {
+        auto const radio = iv->getRadio();
+        auto const targetQueueSize = radio->getQueueSizeForTarget(iv->serial());
+        if (targetQueueSize + slots > HOY_INVERTER_POLL_QUEUE_HIGH_WATERMARK) {
+            if (!pollThrottled) {
+                ESP_LOGD(TAG, "Skip polling inverter %s: RF queue has %" PRIu32
+                        " command%s for this inverter and leaves no room for %" PRIu32
+                        " poll request%s (limit %u)",
+                        iv->serialString().c_str(),
+                        targetQueueSize,
+                        targetQueueSize == 1 ? "" : "s",
+                        slots,
+                        slots == 1 ? "" : "s",
+                        HOY_INVERTER_POLL_QUEUE_HIGH_WATERMARK);
+                pollThrottled = true;
+            }
+            return false;
+        }
+
+        if (!throttleUnreachablePolls) {
+            return true;
+        }
+
+        auto const queueSize = radio->getQueueSize();
+        if (queueSize + slots <= HOY_UNREACHABLE_POLL_QUEUE_HIGH_WATERMARK) {
+            return true;
+        }
+
+        if (!pollThrottled) {
+            ESP_LOGD(TAG, "Skip polling unreachable inverter %s: RF queue size %" PRIu32
+                    " leaves no room for %" PRIu32 " poll request%s (limit %u)",
+                    iv->serialString().c_str(),
+                    queueSize,
+                    slots,
+                    slots == 1 ? "" : "s",
+                    HOY_UNREACHABLE_POLL_QUEUE_HIGH_WATERMARK);
+            pollThrottled = true;
+        }
+        return false;
+    };
+
+    if (!iv->isReachable() && canEnqueuePollRequest()) {
         iv->sendChangeChannelRequest();
     }
 
     if (Utils::getTimeAvailable()) {
         // Fetch statistics
-        iv->sendStatsRequest();
-
-        // Fetch event log
-        const bool force = iv->EventLog()->getLastAlarmRequestSuccess() == CMD_NOK;
-        iv->sendAlarmLogRequest(force);
+        if (canEnqueuePollRequest()) {
+            iv->sendStatsRequest();
+        }
 
         // Fetch limit
         if (((millis() - iv->SystemConfigPara()->getLastUpdateRequest() > HOY_SYSTEM_CONFIG_PARA_POLL_INTERVAL)
                 && (millis() - iv->SystemConfigPara()->getLastUpdateCommand() > HOY_SYSTEM_CONFIG_PARA_POLL_MIN_DURATION))) {
-            ESP_LOGI(TAG, "Request SystemConfigPara");
-            iv->sendSystemConfigParaRequest();
-        }
-
-        // Fetch grid profile
-        if (iv->Statistics()->getLastUpdate() > 0 && (iv->GridProfile()->getLastUpdate() == 0 || !iv->GridProfile()->containsValidData())) {
-            iv->sendGridOnProFileParaRequest();
+            if (canEnqueuePollRequest()) {
+                ESP_LOGI(TAG, "Request SystemConfigPara");
+                iv->sendSystemConfigParaRequest();
+            }
         }
 
         // Fetch dev info (but first fetch stats)
@@ -203,8 +259,30 @@ bool HoymilesClass::pollInverter(std::shared_ptr<InverterAbstract> iv)
             if ((iv->DevInfo()->getLastUpdateAll() == 0)
                 || (iv->DevInfo()->getLastUpdateSimple() == 0)
                 || invalidDevInfo) {
-                ESP_LOGI(TAG, "Request device info");
-                iv->sendDevInfoRequest();
+                if (canEnqueuePollRequest(2)) {
+                    ESP_LOGI(TAG, "Request device info");
+                    iv->sendDevInfoRequest();
+                }
+            }
+        }
+
+        // Fetch event log
+        const bool force = iv->EventLog()->getLastAlarmRequestSuccess() == CMD_NOK;
+        const bool alarmLogRetryDue = !force
+            || isBackoffElapsed(backoff->lastAlarmLogRequestMillis, HOY_ALARM_LOG_POLL_RETRY_INTERVAL);
+        if (alarmLogRetryDue && canEnqueuePollRequest()) {
+            if (iv->sendAlarmLogRequest(force)) {
+                backoff->lastAlarmLogRequestMillis = now;
+            }
+        }
+
+        // Fetch grid profile
+        if (iv->Statistics()->getLastUpdate() > 0 && (iv->GridProfile()->getLastUpdate() == 0 || !iv->GridProfile()->containsValidData())) {
+            if (isBackoffElapsed(backoff->lastGridProfileRequestMillis, HOY_GRID_PROFILE_POLL_RETRY_INTERVAL)
+                    && canEnqueuePollRequest()) {
+                if (iv->sendGridOnProFileParaRequest()) {
+                    backoff->lastGridProfileRequestMillis = now;
+                }
             }
         }
     }
@@ -345,6 +423,18 @@ HoymilesRadio_CMT* HoymilesClass::getRadioCmt()
     return _radioCmt.get();
 }
 #endif
+
+void HoymilesClass::getRadioRequestHistory(std::vector<HoymilesRadio::RequestHistoryRecord>& records) const
+{
+    if (_radioNrf) {
+        _radioNrf->getRequestHistory(records);
+    }
+#ifndef HOYMILES_NRF_ONLY
+    if (_radioCmt) {
+        _radioCmt->getRequestHistory(records);
+    }
+#endif
+}
 
 bool HoymilesClass::isAllRadioIdle() const
 {

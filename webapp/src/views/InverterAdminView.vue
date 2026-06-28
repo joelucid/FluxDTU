@@ -156,6 +156,28 @@
                         class="form-control"
                         maxlength="31"
                     />
+                    <label for="inverter-max-power-override" class="col-form-label">
+                        {{ $t('inverteradmin.MaxPowerOverride') }}
+                        <BIconInfoCircle v-tooltip :title="$t('inverteradmin.MaxPowerOverrideHint')" />
+                    </label>
+                    <div class="input-group">
+                        <input
+                            v-model.number="selectedInverterData.max_power_override"
+                            type="number"
+                            id="inverter-max-power-override"
+                            class="form-control"
+                            min="0"
+                            max="1000"
+                        />
+                        <span class="input-group-text">W</span>
+                    </div>
+                    <div v-if="selectedInverterData.detected_max_power > 0" class="form-text">
+                        {{
+                            $t('inverteradmin.DetectedMaxPower', {
+                                power: $n(selectedInverterData.detected_max_power, 'decimal'),
+                            })
+                        }}
+                    </div>
 
                     <CardElement :text="$t('inverteradmin.InverterStatus')" addSpace>
                         <InputElement

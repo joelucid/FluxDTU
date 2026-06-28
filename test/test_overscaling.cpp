@@ -27,6 +27,45 @@ void testShadedMpptCounting() {
     std::cout << "✓ PASSED: Shaded MPPT counting correct" << std::endl;
 }
 
+void testCompensableShadingDetection() {
+    std::cout << "Testing: Compensable MPPT shading detection" << std::endl;
+
+    std::vector<OverscalingCalculator::MpptData> oneWeakInput = {
+        {369.2f}, {298.3f}
+    };
+    std::vector<OverscalingCalculator::MpptData> allWeakInputs = {
+        {290.0f}, {298.3f}
+    };
+    std::vector<OverscalingCalculator::MpptData> noWeakInputs = {
+        {369.2f}, {350.0f}
+    };
+
+    assert(OverscalingCalculator::hasCompensableShading(oneWeakInput, 337.0f));
+    assert(!OverscalingCalculator::hasCompensableShading(allWeakInputs, 337.0f));
+    assert(!OverscalingCalculator::hasCompensableShading(noWeakInputs, 337.0f));
+
+    std::cout << "✓ PASSED: Compensable MPPT shading detected correctly" << std::endl;
+}
+
+void testMaxCompensatedOutputCapsIncreaseCapacity() {
+    std::cout << "Testing: Max compensated output caps overscaling capacity" << std::endl;
+
+    std::vector<OverscalingCalculator::MpptData> mpptData = {
+        {369.2f}, {298.3f}
+    };
+
+    auto const expectedPowerPerMppt = (695 / 2) * currentThreshold;
+    uint16_t result = OverscalingCalculator::calculateMaxCompensatedOutput(
+            mpptData,
+            1000,
+            expectedPowerPerMppt);
+
+    assert(result >= 798);
+    assert(result < 800);
+
+    std::cout << "✓ PASSED: Max compensated output capped at " << result << "W)" << std::endl;
+}
+
 // Tests for scenarios where new expected output is HIGHER than current limit
 void testHigherOutputNoShading() {
     std::cout << "Testing: Higher output, no shading - no overscaling needed" << std::endl;
@@ -176,6 +215,46 @@ void testPartialShadingScenarios() {
     std::cout << "✓ PASSED: Partial shading with increasing power scales correctly (result: " << result << "W)" << std::endl;
 }
 
+void testTwoMpptShedScenarioRequiresLargeOverscaling() {
+    std::cout << "Testing: Two-MPPT shed scenario needs more than 1:1 limit increase" << std::endl;
+
+    std::vector<OverscalingCalculator::MpptData> mpptData = {
+        {369.2f}, {298.3f}
+    };
+
+    uint16_t result = OverscalingCalculator::calculateOverscaledLimit(
+            695,
+            795,
+            mpptData,
+            1000,
+            currentThreshold,
+            newThreshold);
+
+    assert(result >= 990);
+    assert(result > 895);
+
+    std::cout << "✓ PASSED: Two-MPPT shed scenario overscales to " << result << "W)" << std::endl;
+}
+
+void testOverscaledOutputCapUsesTargetThreshold() {
+    std::cout << "Testing: Overscaled output cap uses target threshold" << std::endl;
+
+    std::vector<OverscalingCalculator::MpptData> mpptData = {
+        {350.3f}, {264.1f}
+    };
+
+    uint16_t result = OverscalingCalculator::calculateOverscaledLimitForExpectedOutput(
+            699,
+            mpptData,
+            1500,
+            newThreshold);
+
+    assert(result >= 860);
+    assert(result < 900);
+
+    std::cout << "✓ PASSED: Overscaled output cap stays scaled at " << result << "W)" << std::endl;
+}
+
 void testEdgeCaseShadingScenarios() {
     std::cout << "Testing: Edge case shading scenarios" << std::endl;
 
@@ -209,6 +288,119 @@ void testEdgeCaseShadingScenarios() {
     std::cout << "✓ PASSED: Edge case shading scenarios handled correctly" << std::endl;
 }
 
+void testPerChannelLimitBindingForHm1500StyleLimit() {
+    std::cout << "Testing: HM-1500 style per-channel limit binding" << std::endl;
+
+    std::vector<OverscalingCalculator::ChannelData> channelData = {
+        {38.0f}, {46.74f}, {35.625f}, {48.735f}
+    };
+
+    auto [boundCount, boundPowerSum] =
+        OverscalingCalculator::countLimitBoundChannels(
+                198,
+                channelData,
+                0.95f);
+    assert(boundCount == 1);
+    assert(boundPowerSum > 48.0f);
+    assert(boundPowerSum < 49.0f);
+
+    auto const modeledCurrentOutput =
+        OverscalingCalculator::calculatePerChannelLimitOutput(
+                198,
+                198,
+                channelData,
+                0.95f);
+    assert(modeledCurrentOutput >= 169);
+    assert(modeledCurrentOutput <= 170);
+
+    auto const scaledLimit =
+        OverscalingCalculator::calculatePerChannelOverscaledLimit(
+                198,
+                232,
+                channelData,
+                1500,
+                0.95f);
+    assert(scaledLimit == 447);
+
+    auto const maxOutput =
+        OverscalingCalculator::calculateMaxPerChannelOutput(
+                198,
+                channelData,
+                1500,
+                0.95f);
+    assert(maxOutput == 495);
+
+    std::cout << "✓ PASSED: HM-1500 channel limit scales to " << scaledLimit << "W)" << std::endl;
+}
+
+void testPerChannelLimitAllChannelsBoundNeedsNoOverscale() {
+    std::cout << "Testing: Per-channel limit with all channels bound" << std::endl;
+
+    std::vector<OverscalingCalculator::ChannelData> channelData = {
+        {145.0f}, {146.0f}, {144.0f}, {145.0f}
+    };
+
+    auto [boundCount, boundPowerSum] =
+        OverscalingCalculator::countLimitBoundChannels(
+                600,
+                channelData,
+                0.95f);
+    assert(boundCount == 4);
+    assert(boundPowerSum > 579.0f);
+    assert(boundPowerSum < 581.0f);
+
+    auto const scaledLimit =
+        OverscalingCalculator::calculatePerChannelOverscaledLimit(
+                600,
+                700,
+                channelData,
+                1500,
+                0.95f);
+    assert(scaledLimit == 700);
+
+    auto const maxOutput =
+        OverscalingCalculator::calculateMaxPerChannelOutput(
+                600,
+                channelData,
+                1500,
+                0.95f);
+    assert(maxOutput == 1500);
+
+    std::cout << "✓ PASSED: All bound channels scale 1:1" << std::endl;
+}
+
+void testPerChannelLimitDoesNotInventUnboundCapacity() {
+    std::cout << "Testing: Per-channel limit without bound channels" << std::endl;
+
+    std::vector<OverscalingCalculator::ChannelData> channelData = {
+        {80.0f}, {60.0f}, {40.0f}, {20.0f}
+    };
+
+    assert(!OverscalingCalculator::hasLimitBoundChannel(
+            600,
+            channelData,
+            0.95f));
+
+    auto const scaledLimit =
+        OverscalingCalculator::calculatePerChannelOverscaledLimit(
+                600,
+                250,
+                channelData,
+                1500,
+                0.95f);
+    assert(scaledLimit == 250);
+
+    auto const maxOutput =
+        OverscalingCalculator::calculateMaxPerChannelOutput(
+                600,
+                channelData,
+                1500,
+                0.95f);
+    assert(maxOutput == 200);
+
+    std::cout << "✓ PASSED: Unbound channels do not create non-probing headroom" << std::endl;
+}
+
 int main() {
     std::cout << "=== FluxDTU Overscaling Calculator Tests ===" << std::endl;
     std::cout << "This tests the actual overscaling logic in isolation" << std::endl;
@@ -216,6 +408,8 @@ int main() {
 
     try {
         testShadedMpptCounting();
+        testCompensableShadingDetection();
+        testMaxCompensatedOutputCapsIncreaseCapacity();
 
         testHigherOutputNoShading();
         testHigherOutputOneShaded();
@@ -231,7 +425,12 @@ int main() {
         // Realistic shading tests with non-zero values
         testRealisticShadingScenarios();
         testPartialShadingScenarios();
+        testTwoMpptShedScenarioRequiresLargeOverscaling();
+        testOverscaledOutputCapUsesTargetThreshold();
         testEdgeCaseShadingScenarios();
+        testPerChannelLimitBindingForHm1500StyleLimit();
+        testPerChannelLimitAllChannelsBoundNeedsNoOverscale();
+        testPerChannelLimitDoesNotInventUnboundCapacity();
 
         std::cout << std::endl;
         std::cout << "✓ ALL TESTS PASSED!" << std::endl;

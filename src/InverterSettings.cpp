@@ -99,6 +99,7 @@ void InverterSettingsClass::init(Scheduler& scheduler)
         inv->setZeroValuesIfUnreachable(inv_cfg.ZeroRuntimeDataIfUnrechable);
         inv->setZeroYieldDayOnMidnight(inv_cfg.ZeroYieldDayOnMidnight);
         inv->setClearEventlogOnMidnight(inv_cfg.ClearEventlogOnMidnight);
+        inv->setMaxPowerOverride(inv_cfg.MaxPowerOverride);
         inv->Statistics()->setYieldDayCorrection(inv_cfg.YieldDayCorrection);
         for (uint8_t c = 0; c < INV_MAX_CHAN_COUNT; c++) {
             inv->Statistics()->setStringMaxPower(c, inv_cfg.channel[c].MaxChannelPower);
@@ -134,6 +135,7 @@ void InverterSettingsClass::settingsLoop()
 
         inv->setEnablePolling(inv_cfg.Poll_Enable && (isDayPeriod || inv_cfg.Poll_Enable_Night));
         inv->setEnableCommands(inv_cfg.Command_Enable && (isDayPeriod || inv_cfg.Command_Enable_Night));
+        inv->setMaxPowerOverride(inv_cfg.MaxPowerOverride);
     }
 }
 

@@ -16,13 +16,16 @@ public:
     void loop() final;
     std::shared_ptr<::GridChargers::Stats> getStats() const final { return _stats; }
     int16_t getAutoPowerTargetPowerConsumption() const final;
-    bool isAutoPowerTargetPowerConsumptionZeroHoldActive() const final;
     bool isAutoPowerLimitedByAvailablePower() const final { return _autoPowerLimitedByAvailablePower; }
     bool supportsPowerLimiterControl() const final { return true; }
     std::optional<uint32_t> getPowerLimiterOutputReferenceMillis() const final;
     uint16_t getPowerLimiterCurrentInputPowerWatts() const final;
+    std::optional<uint16_t> getPowerLimiterTargetInputPowerWatts() const final;
     uint16_t getPowerLimiterExpectedInputPowerWatts() const final;
     uint16_t getPowerLimiterMaxInputPowerWatts() const final;
+    std::optional<::GridChargers::PowerLimiterControlProposal>
+        getPowerLimiterControlProposal(uint16_t targetInputPowerWatts) const final;
+    std::vector<::GridChargers::PowerLimiterTargetDispatchEvent> consumePowerLimiterTargetDispatchEvents() final;
     uint16_t applyPowerLimiterInputPowerIncrease(uint16_t increase) final;
     uint16_t applyPowerLimiterInputPowerReduction(uint16_t reduction) final;
     void setPowerLimiterLimitedByAvailablePower(bool limited) final { _autoPowerLimitedByAvailablePower = limited; }
@@ -86,7 +89,12 @@ private:
     void setRequestedPowerAc(float power);
     float _requestedPowerAc = 0;
     std::optional<uint16_t> _oPowerLimiterTargetInputPowerWatts = std::nullopt;
+    std::optional<uint16_t> _oPowerLimiterDispatchPendingTargetInputPowerWatts = std::nullopt;
+    std::optional<uint32_t> _oPowerLimiterDispatchPendingTargetEffectAssumptionMillis = std::nullopt;
     uint32_t _powerLimiterCommandMillis = 0;
+    uint32_t _powerLimiterCommandEffectAssumptionMillis =
+        ::GridChargers::PowerLimiterNormalTargetEffectAssumptionMillis;
+    std::vector<::GridChargers::PowerLimiterTargetDispatchEvent> _powerLimiterTargetDispatchEvents;
 
     void sendControlCommandRequest();
     void parseControlCommandResponse();
@@ -99,13 +107,16 @@ private:
 
     uint32_t _lastPowerMeterUpdateReceivedMillis = 0; // Timestamp of last seen power meter value
     uint32_t _autoModeBlockedTillMillis = 0;      // Timestamp to block running auto mode for some time
-    uint32_t _autoPowerTargetPowerConsumptionZeroHoldTillMillis = 0;
 
-    void holdAutoPowerTargetPowerConsumptionAtZero();
     float getPowerLimiterMaxInputPowerWattsFloat() const;
+    bool shouldBlockAutoPowerByBatteryState(
+            bool batterySoCValid,
+            float batterySoC,
+            bool bmsChargeBlocked) const;
 
     bool _autoPowerEnabled = false;
     bool _autoPowerLimitedByAvailablePower = false;
+    mutable bool _autoPowerBlockedByBatteryState = false;
     bool _batteryEmergencyCharging = false;
 };
 

@@ -12,6 +12,7 @@
 #include <Configuration.h>
 #include <LogHelper.h>
 #include <MqttSettings.h>
+#include <gridcharger/huawei/PowerTelemetry.h>
 
 #undef TAG
 static const char* TAG = "gridCharger";
@@ -26,16 +27,13 @@ namespace GridChargers::Huawei {
 
 // Wait time/current before shuting down the PSU / charger
 // This is set to allow the fan to run for some time
-#define HUAWEI_AUTO_MODE_SHUTDOWN_DELAY 60000
-#define HUAWEI_AUTO_MODE_SHUTDOWN_CURRENT 0.75
+#define HUAWEI_AUTO_MODE_SHUTDOWN_DELAY (5 * 60 * 1000)
+#define HUAWEI_AUTO_MODE_SHUTDOWN_CURRENT 0.0f
 #define HUAWEI_AUTO_MODE_STABILIZATION_DELAY 5000
 #define HUAWEI_AUTO_MODE_LOWER_LIMIT_HOLD_DELAY 10000
-#define HUAWEI_AUTO_MODE_DEFAULT_EFFICIENCY 0.9f
-#define HUAWEI_AUTO_MODE_BMS_CURRENT_MARGIN 0.5f
 
 namespace {
 
-constexpr uint32_t AutoPowerTargetZeroHoldMillis = 5 * 1000;
 constexpr uint32_t AutoPowerStartupQualificationMillis = 5 * 1000;
 constexpr float AutoPowerLowerLimitHoldAbortGridImportWatts = 100.0f;
 constexpr float AutoPowerLowerLimitHoldAbortLowerLimitRatio = 0.5f;
@@ -68,6 +66,29 @@ uint16_t wattsToUint16(float watts)
             std::round(watts),
             0.0f,
             static_cast<float>(std::numeric_limits<uint16_t>::max())));
+}
+
+int16_t wattsToInt16(float watts)
+{
+    return static_cast<int16_t>(std::clamp<float>(
+            std::round(watts),
+            static_cast<float>(std::numeric_limits<int16_t>::min()),
+            static_cast<float>(std::numeric_limits<int16_t>::max())));
+}
+
+float getOtherChargeCurrent(::Batteries::Stats const& stats, float chargerOutputCurrent, bool ignoreBmsCurrent)
+{
+    if (ignoreBmsCurrent || !stats.isCurrentValid()) { return 0.0f; }
+
+    return std::max(stats.getChargeCurrent() - chargerOutputCurrent, 0.0f);
+}
+
+float getBmsChargeCurrentMargin()
+{
+    return std::clamp(
+            Configuration.get().GridCharger.AutoPowerBmsChargeCurrentMargin,
+            Provider::MIN_AUTO_POWER_BMS_CHARGE_CURRENT_MARGIN,
+            Provider::MAX_AUTO_POWER_BMS_CHARGE_CURRENT_MARGIN);
 }
 
 } // namespace
@@ -140,7 +161,6 @@ void Provider::enableOutput()
 
     _setProduction(true);
     _oOutputEnabled = true;
-    holdAutoPowerTargetPowerConsumptionAtZero();
 
     if (_huaweiPower <= GPIO_NUM_NC) { return; }
     digitalWrite(_huaweiPower, 0);
@@ -188,6 +208,12 @@ void Provider::loop()
 
     if (!_upHardwareInterface) { return; }
 
+    for (auto const& event : _upHardwareInterface->consumePowerLimiterTargetDispatchEvents()) {
+        _powerLimiterCommandMillis = event.sentMillis;
+        _powerLimiterCommandEffectAssumptionMillis = event.targetEffectAssumptionMillis;
+        _powerLimiterTargetDispatchEvents.push_back(event);
+    }
+
     auto const& config = Configuration.get();
 
     if (!config.GridCharger.Enabled) {
@@ -206,7 +232,7 @@ void Provider::loop()
     auto oOutputPower = _dataPoints.get<DataPointLabel::OutputPower>();
     auto oOnlineCurrent = _dataPoints.get<DataPointLabel::OnlineCurrent>();
     auto oEfficiency = _dataPoints.get<DataPointLabel::Efficiency>();
-    float efficiency = HUAWEI_AUTO_MODE_DEFAULT_EFFICIENCY;
+    float efficiency = HuaweiDefaultEfficiency;
     if (oEfficiency && *oEfficiency > 50.0f) {
         efficiency = std::clamp(*oEfficiency / 100.0f, 0.5f, 1.0f);
     }
@@ -216,8 +242,11 @@ void Provider::loop()
         _outputCurrentOnSinceMillis = millis();
     }
 
-    if (_outputCurrentOnSinceMillis + HUAWEI_AUTO_MODE_SHUTDOWN_DELAY < millis() &&
-            (_mode == HUAWEI_MODE_AUTO_EXT || _mode == HUAWEI_MODE_AUTO_INT)) {
+    bool const lowCurrentShutdownEnabled =
+        config.GridCharger.AutoPowerEnabled && _mode == HUAWEI_MODE_AUTO_INT;
+    if (!lowCurrentShutdownEnabled) {
+        _outputCurrentOnSinceMillis = millis();
+    } else if (_outputCurrentOnSinceMillis + HUAWEI_AUTO_MODE_SHUTDOWN_DELAY < millis()) {
         disableOutput();
     }
 
@@ -299,30 +328,45 @@ void Provider::loop()
             return;
         }
 
+        if (powerLimiterManaged) {
+            return;
+        }
+
         if (config.Battery.Enabled && stats->updateAvailable(_lastBatteryUpdateReceivedMillis)) {
             _lastBatteryUpdateReceivedMillis = millis();
 
             if (stats->isChargeCurrentLimitValid()) {
                 float chargeCurrentLimit = stats->getChargeCurrentLimit();
+                auto const bmsChargeCurrentMargin = getBmsChargeCurrentMargin();
                 float outputCurrentLimit = std::max(
-                        chargeCurrentLimit - HUAWEI_AUTO_MODE_BMS_CURRENT_MARGIN, 0.0f);
+                        chargeCurrentLimit - bmsChargeCurrentMargin, 0.0f);
 
-                float otherChargeCurrent = 0.0f;
-                if (stats->isCurrentValid()) {
-                    otherChargeCurrent = stats->getChargeCurrent() - *oOutputCurrent;
-                    otherChargeCurrent = std::max(otherChargeCurrent, 0.0f);
-                }
+                float otherChargeCurrent = getOtherChargeCurrent(
+                        *stats,
+                        *oOutputCurrent,
+                        config.GridCharger.AutoPowerIgnoreBmsCurrent);
 
                 float outputCurrent = std::max(outputCurrentLimit - otherChargeCurrent, 0.0f);
+                if (powerLimiterManaged) {
+                    auto const powerLimiterTargetInputPowerWatts =
+                        _oPowerLimiterTargetInputPowerWatts.value_or(0);
+                    auto const powerLimiterTargetOutputCurrent = *oOutputVoltage > 0.0f
+                        ? (static_cast<float>(powerLimiterTargetInputPowerWatts) * efficiency)
+                            / *oOutputVoltage
+                        : 0.0f;
+                    outputCurrent = std::min(outputCurrent, powerLimiterTargetOutputCurrent);
+                }
+
                 float acknowledgedOutputCurrent = oOnlineCurrent.value_or(*oOutputCurrent);
                 float currentToLimit = std::max(*oOutputCurrent, acknowledgedOutputCurrent);
 
                 if (currentToLimit > outputCurrent) {
                     _autoPowerLimitedByAvailablePower = false;
                     DTU_LOGD("Huawei current %.2fA exceeds BMS permissible %.2fA "
-                            "(output %.2fA, ack %.2fA, limit %.2fA, other charge %.2fA), reducing immediately",
+                            "(output %.2fA, ack %.2fA, limit %.2fA, margin %.2fA, other charge %.2fA%s), reducing immediately",
                             currentToLimit, outputCurrent, *oOutputCurrent,
-                            acknowledgedOutputCurrent, chargeCurrentLimit, otherChargeCurrent);
+                            acknowledgedOutputCurrent, chargeCurrentLimit, bmsChargeCurrentMargin, otherChargeCurrent,
+                            config.GridCharger.AutoPowerIgnoreBmsCurrent ? ", BMS current ignored" : "");
 
                     _autoPowerEnabled = outputCurrent > HUAWEI_AUTO_MODE_SHUTDOWN_CURRENT;
                     _setParameter(outputCurrent, Setting::OnlineCurrent);
@@ -340,22 +384,13 @@ void Provider::loop()
             return;
         }
 
-        if (powerLimiterManaged) {
-            return;
-        }
-
         if (PowerMeter.getLastUpdate() > _lastPowerMeterUpdateReceivedMillis &&
                 _autoPowerEnabledCounter > 0) {
             // We have received a new PowerMeter value. Also we're _autoPowerEnabled
             // So we're good to calculate a new limit
 
             _lastPowerMeterUpdateReceivedMillis = PowerMeter.getLastUpdate();
-            if (*oOutputPower < config.GridCharger.AutoPowerLowerPowerLimit) {
-                holdAutoPowerTargetPowerConsumptionAtZero();
-            }
-            bool const updateDynamicTarget =
-                !isAutoPowerTargetPowerConsumptionZeroHoldActive();
-            updateDynamicAutoPowerTarget(updateDynamicTarget);
+            updateDynamicAutoPowerTarget(true);
             auto const targetPowerConsumption = getEffectiveAutoPowerTargetPowerConsumption();
 
             // input power diff will be (close to) zero if the power meter value
@@ -371,24 +406,26 @@ void Provider::loop()
             DTU_LOGD("targeting %d W, input diff: %.0f, raw output target: %.0f, current output: %.01f",
                 targetPowerConsumption, inputPowerDiff, rawOutputPowerTarget, *oOutputPower);
 
-            bool stopRequestedByBatterySoC = false;
+            bool stopRequestedByBatteryState = false;
 
-            // Check whether the battery SoC limit setting is enabled
             if (config.Battery.Enabled && config.GridCharger.AutoPowerBatterySoCLimitsEnabled) {
-                auto const batterySoC = Battery.getStats()->getSoC();
-                auto const stopBatterySoCThreshold = GridCharger.getAutoPowerStopBatterySoCThreshold();
-                // Sets power limit to 0 if the BMS reported SoC reaches or exceeds the user configured value
-                if (batterySoC >= stopBatterySoCThreshold) {
-                    stopRequestedByBatterySoC = true;
+                auto const bmsChargeCurrentMargin = getBmsChargeCurrentMargin();
+                auto const bmsChargeBlocked = stats->isChargeCurrentLimitValid()
+                    && stats->getChargeCurrentLimit() <= bmsChargeCurrentMargin;
+                if (shouldBlockAutoPowerByBatteryState(
+                            stats->isSoCValid(),
+                            stats->getSoC(),
+                            bmsChargeBlocked)) {
+                    stopRequestedByBatteryState = true;
                     _autoPowerLimitedByAvailablePower = false;
                     rawOutputPowerTarget = 0;
                     newOutputPowerTarget = 0;
-                    DTU_LOGD("Current battery SoC %.1f reached stop threshold %i, so new output target is %f",
-                            batterySoC, stopBatterySoCThreshold, newOutputPowerTarget);
                 }
             }
 
-            auto const plannedOutputPowerLimit = GridCharger.getAutoPowerSocPlanningOutputPowerLimit(*oOutputPower);
+            auto const plannedOutputPowerLimit = GridCharger.getAutoPowerSocPlanningOutputPowerLimit(
+                    *oOutputPower,
+                    newOutputPowerTarget);
             if (plannedOutputPowerLimit) {
                 rawOutputPowerTarget = std::min(rawOutputPowerTarget, *plannedOutputPowerLimit);
                 newOutputPowerTarget = std::min(newOutputPowerTarget, *plannedOutputPowerLimit);
@@ -397,7 +434,7 @@ void Provider::loop()
             if (plannedOutputPowerLimit) {
                 autoPowerLimit = std::min(autoPowerLimit, *plannedOutputPowerLimit);
             }
-            _autoPowerLimitedByAvailablePower = !stopRequestedByBatterySoC
+            _autoPowerLimitedByAvailablePower = !stopRequestedByBatteryState
                 && rawOutputPowerTarget < autoPowerLimit;
 
             auto const lowerPowerLimit = static_cast<float>(config.GridCharger.AutoPowerLowerPowerLimit);
@@ -409,7 +446,7 @@ void Provider::loop()
                     AutoPowerLowerLimitHoldAbortGridImportWatts,
                     lowerPowerLimit * AutoPowerLowerLimitHoldAbortLowerLimitRatio);
             bool const abortLowerLimitHold = inputPowerDiff < -lowerLimitHoldAbortGridImport;
-            bool const lowerLimitHoldAllowed = !stopRequestedByBatterySoC
+            bool const lowerLimitHoldAllowed = !stopRequestedByBatteryState
                 && !abortLowerLimitHold
                 && _autoPowerReachedLowerPowerLimit
                 && (!plannedOutputPowerLimit || *plannedOutputPowerLimit >= lowerPowerLimit);
@@ -492,17 +529,17 @@ void Provider::loop()
 
                 // Limit the command directly to the current value requested by
                 // the BMS. The measured battery current can lag by several
-                // seconds, so it is only used to subtract other charging sources.
+                // seconds, so subtracting other charging sources is optional.
                 if (config.Battery.Enabled && stats->isChargeCurrentLimitValid()) {
                     float chargeCurrentLimit = stats->getChargeCurrentLimit();
+                    auto const bmsChargeCurrentMargin = getBmsChargeCurrentMargin();
                     float outputCurrentLimit = std::max(
-                            chargeCurrentLimit - HUAWEI_AUTO_MODE_BMS_CURRENT_MARGIN, 0.0f);
+                            chargeCurrentLimit - bmsChargeCurrentMargin, 0.0f);
 
-                    float otherChargeCurrent = 0.0f;
-                    if (stats->isCurrentValid()) {
-                        otherChargeCurrent = stats->getChargeCurrent() - *oOutputCurrent;
-                        otherChargeCurrent = std::max(otherChargeCurrent, 0.0f);
-                    }
+                    float otherChargeCurrent = getOtherChargeCurrent(
+                            *stats,
+                            *oOutputCurrent,
+                            config.GridCharger.AutoPowerIgnoreBmsCurrent);
 
                     float permissibleCurrent = std::max(outputCurrentLimit - otherChargeCurrent, 0.0f);
                     outputCurrent = std::min(outputCurrent, permissibleCurrent);
@@ -511,9 +548,11 @@ void Provider::loop()
                     }
 
                     DTU_LOGD("Setting output current to %.2fA. Calculated %.2fA, "
-                            "BMS limit %.2fA, other charge %.2fA, permissible %.2fA",
+                            "BMS limit %.2fA, margin %.2fA, other charge %.2fA%s, permissible %.2fA",
                             outputCurrent, calculatedCurrent, chargeCurrentLimit,
-                            otherChargeCurrent, permissibleCurrent);
+                            bmsChargeCurrentMargin, otherChargeCurrent,
+                            config.GridCharger.AutoPowerIgnoreBmsCurrent ? ", BMS current ignored" : "",
+                            permissibleCurrent);
                 } else {
                     DTU_LOGD("Setting output current to %.2fA. Calculated %.2fA, "
                             "no valid BMS charge current limit",
@@ -541,30 +580,6 @@ void Provider::loop()
     }
 }
 
-void Provider::holdAutoPowerTargetPowerConsumptionAtZero()
-{
-    if (PowerLimiter.isGridChargerManaged()) {
-        _autoPowerTargetPowerConsumptionZeroHoldTillMillis = 0;
-        return;
-    }
-
-    bool const wasActive = isAutoPowerTargetPowerConsumptionZeroHoldActive();
-    _autoPowerTargetPowerConsumptionZeroHoldTillMillis = millis() + AutoPowerTargetZeroHoldMillis;
-    resetDynamicAutoPowerTargetState();
-    _autoPowerTargetPowerConsumption = 0;
-
-    if (!wasActive) {
-        DTU_LOGI("Holding charger grid target at 0 W for %u s while startup settles",
-                AutoPowerTargetZeroHoldMillis / 1000);
-    }
-}
-
-bool Provider::isAutoPowerTargetPowerConsumptionZeroHoldActive() const
-{
-    auto const holdTillMillis = _autoPowerTargetPowerConsumptionZeroHoldTillMillis;
-    return holdTillMillis != 0 && !millisAtOrAfter(millis(), holdTillMillis);
-}
-
 bool Provider::isAutoPowerLowerLimitHoldActive() const
 {
     auto const holdTillMillis = _autoPowerLowerLimitHoldTillMillis;
@@ -573,7 +588,9 @@ bool Provider::isAutoPowerLowerLimitHoldActive() const
 
 int16_t Provider::getEffectiveAutoPowerTargetPowerConsumption() const
 {
-    if (isAutoPowerTargetPowerConsumptionZeroHoldActive()) { return 0; }
+    if (PowerLimiter.ownsGridChargerTarget()) {
+        return wattsToInt16(PowerLimiter.getStorageTargetPowerConsumption());
+    }
     return _autoPowerTargetPowerConsumption;
 }
 
@@ -588,6 +605,13 @@ void Provider::resetDynamicAutoPowerTargetState()
 void Provider::updateDynamicAutoPowerTarget(bool chargerControlActive)
 {
     auto const& config = Configuration.get();
+
+    if (PowerLimiter.ownsGridChargerTarget()) {
+        resetDynamicAutoPowerTargetState();
+        _autoPowerTargetPowerConsumption = wattsToInt16(
+                PowerLimiter.getStorageTargetPowerConsumption());
+        return;
+    }
 
     if (!config.GridCharger.AutoPowerTargetPowerConsumptionDynamicEnabled
             || config.GridCharger.AutoPowerTargetPowerConsumptionDynamicWindow == 0
@@ -646,6 +670,10 @@ void Provider::updateDynamicAutoPowerTarget(bool chargerControlActive)
 int16_t Provider::calcAutoPowerTargetPowerConsumption() const
 {
     auto const& config = Configuration.get();
+    if (PowerLimiter.ownsGridChargerTarget()) {
+        return wattsToInt16(PowerLimiter.getStorageTargetPowerConsumption());
+    }
+
     auto const staticTarget = static_cast<int32_t>(std::round(config.GridCharger.AutoPowerTargetPowerConsumption));
     auto const boundedStaticTarget = std::clamp<int32_t>(
             staticTarget,
@@ -683,23 +711,17 @@ int16_t Provider::calcAutoPowerTargetPowerConsumption() const
 
 float Provider::getEfficiency() const
 {
-    auto oEfficiency = _dataPoints.get<DataPointLabel::Efficiency>();
-    if (oEfficiency && *oEfficiency > 50.0f) {
-        return std::clamp(*oEfficiency / 100.0f, 0.5f, 1.0f);
-    }
-
-    return HUAWEI_AUTO_MODE_DEFAULT_EFFICIENCY;
+    return normalizeEfficiency(_dataPoints.get<DataPointLabel::Efficiency>());
 }
 
 std::optional<float> Provider::getCurrentInputPowerWatts() const
 {
-    auto oInputPower = _dataPoints.get<DataPointLabel::InputPower>();
-    if (oInputPower) { return std::max(0.0f, *oInputPower); }
-
-    auto oOutputPower = _dataPoints.get<DataPointLabel::OutputPower>();
-    if (!oOutputPower) { return std::nullopt; }
-
-    return std::max(0.0f, *oOutputPower) / getEfficiency();
+    return estimateInputPowerWatts(
+            _dataPoints.get<DataPointLabel::InputPower>(),
+            _dataPoints.get<DataPointLabel::OutputPower>(),
+            _dataPoints.get<DataPointLabel::OutputVoltage>(),
+            _dataPoints.get<DataPointLabel::OutputCurrent>(),
+            _dataPoints.get<DataPointLabel::Efficiency>());
 }
 
 uint16_t Provider::getPowerLimiterCurrentInputPowerWatts() const
@@ -707,15 +729,70 @@ uint16_t Provider::getPowerLimiterCurrentInputPowerWatts() const
     return wattsToUint16(getCurrentInputPowerWatts().value_or(0.0f));
 }
 
+std::optional<uint16_t> Provider::getPowerLimiterTargetInputPowerWatts() const
+{
+    return _oPowerLimiterTargetInputPowerWatts;
+}
+
 uint16_t Provider::getPowerLimiterExpectedInputPowerWatts() const
 {
     return _oPowerLimiterTargetInputPowerWatts.value_or(getPowerLimiterCurrentInputPowerWatts());
 }
 
+bool Provider::shouldBlockAutoPowerByBatteryState(
+        bool batterySoCValid,
+        float batterySoC,
+        bool bmsChargeBlocked) const
+{
+    auto const& config = Configuration.get();
+    if (!config.Battery.Enabled || !config.GridCharger.AutoPowerBatterySoCLimitsEnabled) {
+        _autoPowerBlockedByBatteryState = false;
+        return false;
+    }
+
+    if (!batterySoCValid) {
+        return _autoPowerBlockedByBatteryState;
+    }
+
+    auto const stopBatterySoCThreshold = GridCharger.getAutoPowerStopBatterySoCThreshold();
+    auto const configuredReenableBatterySoCThreshold = std::min<uint8_t>(
+            config.GridCharger.AutoPowerReenableBatterySoCThreshold,
+            ::GridChargers::Controller::MaxConfiguredSoCPercent);
+    auto const reenableBatterySoCThreshold = std::min<uint8_t>(
+            configuredReenableBatterySoCThreshold,
+            stopBatterySoCThreshold > 0 ? stopBatterySoCThreshold - 1 : 0);
+
+    if (_autoPowerBlockedByBatteryState) {
+        if (!bmsChargeBlocked && batterySoC <= reenableBatterySoCThreshold) {
+            _autoPowerBlockedByBatteryState = false;
+            DTU_LOGI("Re-enabling automatic charging because battery SoC %.1f reached threshold %u",
+                    batterySoC, reenableBatterySoCThreshold);
+        } else {
+            return true;
+        }
+    }
+
+    if (batterySoC >= stopBatterySoCThreshold) {
+        _autoPowerBlockedByBatteryState = true;
+        DTU_LOGI("Stopping charger because battery SoC %.1f reached stop threshold %u; re-enable at %u",
+                batterySoC, stopBatterySoCThreshold, reenableBatterySoCThreshold);
+        return true;
+    }
+
+    if (bmsChargeBlocked) {
+        _autoPowerBlockedByBatteryState = true;
+        DTU_LOGI("Stopping charger because the BMS reports charging not possible; re-enable at SoC %u",
+                reenableBatterySoCThreshold);
+        return true;
+    }
+
+    return false;
+}
+
 std::optional<uint32_t> Provider::getPowerLimiterOutputReferenceMillis() const
 {
     if (_powerLimiterCommandMillis != 0) {
-        return _powerLimiterCommandMillis + HUAWEI_AUTO_MODE_STABILIZATION_DELAY;
+        return _powerLimiterCommandMillis + _powerLimiterCommandEffectAssumptionMillis;
     }
 
     auto const statsMillis = _stats->getLastUpdate();
@@ -740,29 +817,38 @@ float Provider::getPowerLimiterMaxInputPowerWattsFloat() const
 
     auto stats = Battery.getStats();
     if (config.Battery.Enabled && config.GridCharger.AutoPowerBatterySoCLimitsEnabled) {
-        auto const batterySoC = stats->getSoC();
-        auto const stopBatterySoCThreshold = GridCharger.getAutoPowerStopBatterySoCThreshold();
-        if (batterySoC >= stopBatterySoCThreshold) { return 0.0f; }
+        auto const bmsChargeCurrentMargin = getBmsChargeCurrentMargin();
+        auto const bmsChargeBlocked = stats->isChargeCurrentLimitValid()
+            && stats->getChargeCurrentLimit() <= bmsChargeCurrentMargin;
+        if (shouldBlockAutoPowerByBatteryState(
+                    stats->isSoCValid(),
+                    stats->getSoC(),
+                    bmsChargeBlocked)) {
+            return 0.0f;
+        }
     }
 
     float maxOutputPower = static_cast<float>(config.GridCharger.AutoPowerUpperPowerLimit);
     auto const plannedOutputPowerLimit = GridCharger.getAutoPowerSocPlanningOutputPowerLimit(
-            _dataPoints.get<DataPointLabel::OutputPower>().value_or(0.0f));
+            _dataPoints.get<DataPointLabel::OutputPower>().value_or(0.0f),
+            static_cast<float>(getPowerLimiterExpectedInputPowerWatts()) * getEfficiency());
     if (plannedOutputPowerLimit) {
         maxOutputPower = std::min(maxOutputPower, *plannedOutputPowerLimit);
     }
 
     if (config.Battery.Enabled && stats->isChargeCurrentLimitValid()) {
         float chargeCurrentLimit = stats->getChargeCurrentLimit();
+        auto const bmsChargeCurrentMargin = getBmsChargeCurrentMargin();
         float outputCurrentLimit = std::max(
-                chargeCurrentLimit - HUAWEI_AUTO_MODE_BMS_CURRENT_MARGIN, 0.0f);
+                chargeCurrentLimit - bmsChargeCurrentMargin, 0.0f);
 
-        float otherChargeCurrent = 0.0f;
         auto oOutputCurrent = _dataPoints.get<DataPointLabel::OutputCurrent>();
-        if (stats->isCurrentValid() && oOutputCurrent) {
-            otherChargeCurrent = stats->getChargeCurrent() - *oOutputCurrent;
-            otherChargeCurrent = std::max(otherChargeCurrent, 0.0f);
-        }
+        float otherChargeCurrent = oOutputCurrent
+            ? getOtherChargeCurrent(
+                    *stats,
+                    *oOutputCurrent,
+                    config.GridCharger.AutoPowerIgnoreBmsCurrent)
+            : 0.0f;
 
         float permissibleCurrent = std::max(outputCurrentLimit - otherChargeCurrent, 0.0f);
         maxOutputPower = std::min(maxOutputPower, permissibleCurrent * *oOutputVoltage);
@@ -776,6 +862,99 @@ float Provider::getPowerLimiterMaxInputPowerWattsFloat() const
 uint16_t Provider::getPowerLimiterMaxInputPowerWatts() const
 {
     return wattsToUint16(getPowerLimiterMaxInputPowerWattsFloat());
+}
+
+std::optional<::GridChargers::PowerLimiterControlProposal>
+Provider::getPowerLimiterControlProposal(uint16_t targetInputPowerWatts) const
+{
+    ::GridChargers::PowerLimiterControlProposal proposal;
+    proposal.targetInputPowerWatts = targetInputPowerWatts;
+
+    auto const& config = Configuration.get();
+    if (!config.GridCharger.Enabled
+            || !config.GridCharger.AutoPowerEnabled
+            || _mode != HUAWEI_MODE_AUTO_INT) {
+        proposal.limitedByAvailablePower = targetInputPowerWatts > 0;
+        proposal.targetInputPowerWatts = 0;
+        return proposal;
+    }
+
+    auto oOutputVoltage = _dataPoints.get<DataPointLabel::OutputVoltage>();
+    if (!oOutputVoltage || *oOutputVoltage <= 0.0f) {
+        proposal.limitedByAvailablePower = targetInputPowerWatts > 0;
+        proposal.targetInputPowerWatts = 0;
+        return proposal;
+    }
+
+    auto stats = Battery.getStats();
+    if (config.Battery.Enabled && config.GridCharger.AutoPowerBatterySoCLimitsEnabled) {
+        auto const bmsChargeCurrentMargin = getBmsChargeCurrentMargin();
+        auto const bmsChargeBlocked = stats->isChargeCurrentLimitValid()
+            && stats->getChargeCurrentLimit() <= bmsChargeCurrentMargin;
+        if (shouldBlockAutoPowerByBatteryState(
+                    stats->isSoCValid(),
+                    stats->getSoC(),
+                    bmsChargeBlocked)) {
+            proposal.limitedByAvailablePower = targetInputPowerWatts > 0;
+            proposal.targetInputPowerWatts = 0;
+            return proposal;
+        }
+    }
+
+    auto const efficiency = getEfficiency();
+    float maxOutputPower = static_cast<float>(config.GridCharger.AutoPowerUpperPowerLimit);
+    auto const plannedOutputPowerLimit = GridCharger.getAutoPowerSocPlanningOutputPowerLimit(
+            _dataPoints.get<DataPointLabel::OutputPower>().value_or(0.0f),
+            static_cast<float>(targetInputPowerWatts) * efficiency);
+    if (plannedOutputPowerLimit) {
+        maxOutputPower = std::min(maxOutputPower, *plannedOutputPowerLimit);
+    }
+
+    if (config.Battery.Enabled && stats->isChargeCurrentLimitValid()) {
+        float chargeCurrentLimit = stats->getChargeCurrentLimit();
+        auto const bmsChargeCurrentMargin = getBmsChargeCurrentMargin();
+        float outputCurrentLimit = std::max(
+                chargeCurrentLimit - bmsChargeCurrentMargin, 0.0f);
+
+        auto oOutputCurrent = _dataPoints.get<DataPointLabel::OutputCurrent>();
+        float otherChargeCurrent = oOutputCurrent
+            ? getOtherChargeCurrent(
+                    *stats,
+                    *oOutputCurrent,
+                    config.GridCharger.AutoPowerIgnoreBmsCurrent)
+            : 0.0f;
+
+        float permissibleCurrent = std::max(outputCurrentLimit - otherChargeCurrent, 0.0f);
+        maxOutputPower = std::min(maxOutputPower, permissibleCurrent * *oOutputVoltage);
+    }
+
+    auto const maxInputPower = maxOutputPower <= 0.0f
+        ? 0.0f
+        : maxOutputPower / efficiency;
+    auto proposed = std::min(
+            targetInputPowerWatts,
+            wattsToUint16(maxInputPower));
+
+    auto const minInputPower = wattsToUint16(
+            static_cast<float>(config.GridCharger.AutoPowerLowerPowerLimit)
+            / efficiency);
+    if (proposed > 0 && proposed < minInputPower) {
+        proposed = 0;
+    }
+
+    proposal.limitedByAvailablePower = proposed < targetInputPowerWatts;
+    proposal.targetInputPowerWatts = proposed;
+    return proposal;
+}
+
+std::vector<::GridChargers::PowerLimiterTargetDispatchEvent>
+Provider::consumePowerLimiterTargetDispatchEvents()
+{
+    std::lock_guard<std::mutex> lock(_mutex);
+
+    auto events = _powerLimiterTargetDispatchEvents;
+    _powerLimiterTargetDispatchEvents.clear();
+    return events;
 }
 
 void Provider::setPowerLimiterInputPowerWatts(float inputPower)
@@ -793,6 +972,11 @@ void Provider::setPowerLimiterInputPowerWatts(float inputPower)
             && *_oPowerLimiterTargetInputPowerWatts == targetInputPower) {
         return;
     }
+    auto const previousInputPower = getPowerLimiterExpectedInputPowerWatts();
+    auto const targetEffectAssumptionMillis =
+        ::GridChargers::powerLimiterTargetEffectAssumptionMillis(
+                previousInputPower,
+                targetInputPower);
 
     auto oOutputVoltage = _dataPoints.get<DataPointLabel::OutputVoltage>();
     if (targetInputPower > 0 && (!oOutputVoltage || *oOutputVoltage <= 0.0f)) {
@@ -805,8 +989,12 @@ void Provider::setPowerLimiterInputPowerWatts(float inputPower)
 
     _autoPowerEnabled = outputCurrent > HUAWEI_AUTO_MODE_SHUTDOWN_CURRENT;
     if (_autoPowerEnabled) { _autoPowerEnabledCounter = 10; }
-    _setParameter(outputCurrent, HardwareInterface::Setting::OnlineCurrent);
-    _powerLimiterCommandMillis = millis();
+    _setParameter(
+            outputCurrent,
+            HardwareInterface::Setting::OnlineCurrent,
+            false,
+            targetInputPower,
+            targetEffectAssumptionMillis);
     _oPowerLimiterTargetInputPowerWatts = targetInputPower;
     _autoModeBlockedTillMillis = millis() + HUAWEI_AUTO_MODE_STABILIZATION_DELAY;
 }
@@ -872,7 +1060,6 @@ void Provider::setProduction(bool enable)
     std::lock_guard<std::mutex> lock(_mutex);
 
     if (!_upHardwareInterface) { return; }
-    if (enable) { holdAutoPowerTargetPowerConsumptionAtZero(); }
     _setProduction(enable);
 }
 
@@ -890,7 +1077,12 @@ void Provider::setParameter(float val, HardwareInterface::Setting setting)
     _setParameter(val, setting, true/*pollFeedback*/);
 }
 
-void Provider::_setParameter(float val, HardwareInterface::Setting setting, bool pollFeedback)
+void Provider::_setParameter(
+        float val,
+        HardwareInterface::Setting setting,
+        bool pollFeedback,
+        std::optional<uint16_t> powerLimiterTargetInputPowerWatts,
+        uint32_t powerLimiterTargetEffectAssumptionMillis)
 {
     // NOTE: the mutex is locked by any method calling this private method
 
@@ -907,14 +1099,16 @@ void Provider::_setParameter(float val, HardwareInterface::Setting setting, bool
     if (val > HUAWEI_AUTO_MODE_SHUTDOWN_CURRENT &&
             setting == Setting::OnlineCurrent &&
             (_mode == HUAWEI_MODE_AUTO_EXT || _mode == HUAWEI_MODE_AUTO_INT)) {
-        if (_lastRequestedOnlineCurrent <= HUAWEI_AUTO_MODE_SHUTDOWN_CURRENT) {
-            holdAutoPowerTargetPowerConsumptionAtZero();
-        }
         enableOutput();
         _outputCurrentOnSinceMillis = millis();
     }
 
-    _upHardwareInterface->setParameter(setting, val, pollFeedback);
+    _upHardwareInterface->setParameter(
+            setting,
+            val,
+            pollFeedback,
+            powerLimiterTargetInputPowerWatts,
+            powerLimiterTargetEffectAssumptionMillis);
 
     if (setting == Setting::OnlineCurrent) {
         _lastRequestedOnlineCurrent = val;

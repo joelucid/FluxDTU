@@ -6,6 +6,10 @@
 #include "queue/CommandQueue.h"
 #include "types.h"
 #include <TimeoutHelper.h>
+#include <array>
+#include <cstddef>
+#include <mutex>
+#include <vector>
 
 #ifdef HOY_DEBUG_QUEUE
 #include <esp_log.h>
@@ -20,16 +24,36 @@ static const char* TAG = "hoymiles";
 
 class HoymilesRadio {
 public:
+    enum class RequestHistoryState : uint8_t {
+        Queued,
+        InProcess,
+        Success,
+        Failed,
+    };
+
+    struct RequestHistoryRecord {
+        uint32_t seq = 0;
+        uint32_t queuedMillis = 0;
+        uint32_t sentMillis = 0;
+        uint32_t updatedMillis = 0;
+        uint64_t serial = 0;
+        char command[32] = {};
+        bool retransmit = false;
+        RequestHistoryState state = RequestHistoryState::Queued;
+    };
+
     serial_u DtuSerial() const;
     virtual void setDtuSerial(const uint64_t serial);
 
     bool isIdle() const;
     bool isQueueEmpty() const;
     uint32_t getQueueSize() const;
+    uint32_t getQueueSizeForTarget(uint64_t targetAddress) const;
     bool isInitialized() const;
 
     void removeCommands(InverterAbstract* inv);
     uint8_t countSimilarCommands(std::shared_ptr<CommandAbstract> cmd);
+    void getRequestHistory(std::vector<RequestHistoryRecord>& records) const;
 
     void enqueCommand(std::shared_ptr<CommandAbstract> cmd)
     {
@@ -37,7 +61,7 @@ public:
         DEBUG_PRINT("Handling command %s with type %d", cmd.get()->getCommandName().c_str(), static_cast<uint8_t>(cmd.get()->getQueueInsertType()));
         switch (cmd.get()->getQueueInsertType()) {
         case QueueInsertType::RemoveOldest:
-            _commandQueue.removeDuplicatedEntries(cmd, _busyFlag);
+            markRequestHistoryRemoved(_commandQueue.removeDuplicatedEntries(cmd, _busyFlag));
             break;
         case QueueInsertType::ReplaceExistent:
             // Checks if the queue already contains a command like the new one
@@ -45,7 +69,8 @@ public:
             // (The new one will not be pushed at the end of the queue)
             if (_commandQueue.countSimilarCommands(cmd) > 0) {
                 DEBUG_PRINT("    ... existing entry will be replaced");
-                _commandQueue.replaceEntries(cmd, _busyFlag);
+                markRequestHistoryRemoved(_commandQueue.replaceEntries(cmd, _busyFlag));
+                recordQueuedRequestHistory(*cmd);
                 return;
             }
             break;
@@ -70,6 +95,7 @@ public:
             DEBUG_PRINT("    ... new entry will be appended");
             _commandQueue.push(cmd);
         }
+        recordQueuedRequestHistory(*cmd);
 
         DEBUG_PRINT("Queue size after: %ld", _commandQueue.size());
     }
@@ -81,14 +107,23 @@ public:
     }
 
 protected:
+    static constexpr size_t RequestHistoryCapacity = 256;
+
     static serial_u convertSerialToRadioId(const serial_u serial);
 
     bool checkFragmentCrc(const fragment_t& fragment) const;
     virtual bool txSuccessCompletesCommand() const { return false; }
     virtual bool sendEsbPacket(CommandAbstract& cmd) = 0;
+    void recordQueuedRequestHistory(CommandAbstract& cmd, bool retransmit = false);
+    void markRequestHistoryInProcess(CommandAbstract& cmd);
+    void markRequestHistoryFinished(CommandAbstract& cmd, bool success);
+    void markRequestHistoryRemoved(std::shared_ptr<CommandAbstract> const& cmd);
+    void markRequestHistoryRemoved(std::vector<std::shared_ptr<CommandAbstract>> const& commands);
     void sendRetransmitPacket(const uint8_t fragment_id);
     void sendLastPacketAgain();
     void handleReceivedPackage();
+
+    RequestHistoryRecord* findRequestHistoryRecord(uint32_t seq);
 
     serial_u _dtuSerial;
     CommandQueue _commandQueue;
@@ -96,4 +131,10 @@ protected:
     bool _busyFlag = false;
 
     TimeoutHelper _rxTimeout;
+
+    mutable std::mutex _requestHistoryMutex;
+    std::array<RequestHistoryRecord, RequestHistoryCapacity> _requestHistory;
+    size_t _requestHistoryWrite = 0;
+    size_t _requestHistoryCount = 0;
+    uint32_t _requestHistorySeq = 1;
 };

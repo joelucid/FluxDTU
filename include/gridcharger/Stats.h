@@ -12,6 +12,8 @@ public:
 
     virtual std::optional<float> getInputPower() const = 0;
 
+    virtual std::optional<float> getOutputPower() const = 0;
+
     // convert stats to JSON for web application live view
     virtual void getLiveViewData(JsonVariant& root) const = 0;
 

@@ -87,13 +87,13 @@ void WebApiPrometheusClass::onPrometheusMetricsGet(AsyncWebServerRequest* reques
             stream->printf("opendtu_inverter_limit_relative{serial=\"%s\",unit=\"%" PRIu8 "\",name=\"%s\"} %f\n",
                 serial.c_str(), i, name, inv->SystemConfigPara()->getLimitPercent() / 100.0);
 
-            if (inv->DevInfo()->getMaxPower() > 0) {
+            if (inv->getMaxPower() > 0) {
                 if (i == 0) {
                     stream->print("# HELP opendtu_inverter_limit_absolute current relative limit of the inverter\n");
                     stream->print("# TYPE opendtu_inverter_limit_absolute gauge\n");
                 }
                 stream->printf("opendtu_inverter_limit_absolute{serial=\"%s\",unit=\"%" PRIu8 "\",name=\"%s\"} %f\n",
-                    serial.c_str(), i, name, inv->SystemConfigPara()->getLimitPercent() * inv->DevInfo()->getMaxPower() / 100.0);
+                    serial.c_str(), i, name, inv->SystemConfigPara()->getLimitPercent() * inv->getMaxPower() / 100.0);
             }
 
             // Loop all channels if Statistics have been updated at least once since DTU boot

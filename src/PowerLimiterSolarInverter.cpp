@@ -1,18 +1,36 @@
 #include "PowerLimiterSolarInverter.h"
+#include <algorithm>
+
+namespace {
+
+static constexpr uint16_t sProductionLimitBindingMarginWatts = 20;
+
+}
 
 PowerLimiterSolarInverter::PowerLimiterSolarInverter(PowerLimiterInverterConfig const& config)
     : PowerLimiterOverscalingInverter(config) { }
 
+bool PowerLimiterSolarInverter::isProductionLimitBinding(uint16_t expectedLimitWatts) const
+{
+    auto const measuredOutput = getMeasuredOutputAcWatts();
+    if (static_cast<float>(measuredOutput) + sProductionLimitBindingMarginWatts
+            >= static_cast<float>(expectedLimitWatts)) {
+        return true;
+    }
+
+    return isPerChannelLimitBinding(expectedLimitWatts);
+}
+
 uint16_t PowerLimiterSolarInverter::getExpectedOutputAcWatts() const
 {
+    if (hasPendingTarget() || isUsingAssumedOutput()) {
+        return PowerLimiterInverter::getExpectedOutputAcWatts();
+    }
+
     // If the inverter is not producing, it cannot cover any of the requested
     // output. This is especially important at night, where otherwise the DPL
     // may reserve power for solar inverters and under-request battery output.
     if (!isProducing()) { return 0; }
-
-    if (hasPendingTarget() || isUsingAssumedOutput()) {
-        return PowerLimiterInverter::getExpectedOutputAcWatts();
-    }
 
     return PowerLimiterInverter::getExpectedOutputAcWatts();
 }
@@ -37,65 +55,57 @@ uint16_t PowerLimiterSolarInverter::getMaxIncreaseWatts() const
         return 0;
     }
 
-    // The inverter produces the configured max power or more.
-    if (getExpectedOutputAcWatts() >= getConfiguredMaxPowerWatts()) { return 0; }
+    auto const expectedOutput = getExpectedOutputAcWatts();
+    if (expectedOutput >= getConfiguredMaxPowerWatts()) { return 0; }
 
-    // The limit is already at the max or higher.
-    if (getExpectedLimitWatts() >= getInverterMaxPowerWatts()) { return 0; }
+    auto const expectedLimit = getExpectedLimitWatts();
+    // Only real telemetry proves that the inverter is production-limited.
+    // Assumed output after a probe must not trigger the next probe.
+    if (!isProductionLimitBinding(expectedLimit)) {
+        if (hasPendingTarget() || isUsingAssumedOutput()) { return 0; }
+        if (!hasCompensableLimitHeadroom(expectedLimit)) { return 0; }
+    }
 
-    // when overscaling is NOT enabled and the limit is already at the configured max power or higher,
-    // we can't increase the power.
-    if (!overscalingEnabled() && getExpectedLimitWatts() >= getConfiguredMaxPowerWatts()) { return 0; }
-
-    uint16_t inverterMaxLimit = 0;
+    auto inverterMaxLimit = getConfiguredMaxPowerWatts();
 
     if (overscalingEnabled() || _spInverter->supportsPowerDistributionLogic()) {
         // we use the inverter's max power, because each MPPT can deliver its max power individually
         inverterMaxLimit = getInverterMaxPowerWatts();
-    } else {
-        inverterMaxLimit = getConfiguredMaxPowerWatts();
     }
 
-    std::vector<MpptNum_t> dcMppts = _spInverter->getMppts();
-    size_t totalMppts = dcMppts.size();
+    if (expectedLimit >= inverterMaxLimit) { return 0; }
 
-    float requiredOutputThreshold = calculateRequiredOutputThreshold(getExpectedLimitWatts());
-    float expectedAcPowerPerMppt = (getExpectedLimitWatts() / totalMppts) * requiredOutputThreshold;
-    uint16_t maxPowerPerMppt = inverterMaxLimit / totalMppts;
-    uint16_t nonShadedMaxIncrease = 0;
-    size_t nonLimitedMppts = 0;
+    // A solar increase is a limit/setpoint probe. MPPT power cannot prove the
+    // available headroom before the higher limit has been sent; the predictive
+    // ledger records these requests as SolarCapacityLimited and keeps the
+    // resulting grid effect uncertain until the meter confirms it.
+    auto const maxOutputIncrease = getConfiguredMaxPowerWatts() - expectedOutput;
+    if (overscalingEnabled()) {
+        auto const maxOverscaledOutput = getMaxOverscaledOutputWatts(expectedLimit);
+        if (maxOverscaledOutput <= expectedOutput) { return 0; }
 
-    for (auto& m : dcMppts) {
-        float mpptPowerAC = calculateMpptPowerAC(m);
-
-        if (mpptPowerAC >= expectedAcPowerPerMppt) {
-            if (maxPowerPerMppt > mpptPowerAC) {
-                nonShadedMaxIncrease += maxPowerPerMppt - mpptPowerAC;
-                nonLimitedMppts++;
-            }
-        }
+        return std::min<uint16_t>(
+                maxOutputIncrease,
+                maxOverscaledOutput - expectedOutput);
     }
 
-    if (nonLimitedMppts == 0) {
-        // all mppts are running at the max power or are shaded, we can't increase the power
+    auto const maxLimitIncrease = inverterMaxLimit - expectedLimit;
+    return std::min(maxOutputIncrease, maxLimitIncrease);
+}
+
+uint16_t PowerLimiterSolarInverter::getMaxNonProbingIncreaseWatts() const
+{
+    if (!isEligible()) { return 0; }
+    if (!isProducing()) { return 0; }
+    if (hasPendingTarget() || isUsingAssumedOutput()) { return 0; }
+
+    auto const expectedLimit = getExpectedLimitWatts();
+    if (!isProductionLimitBinding(expectedLimit)
+            && !hasCompensableLimitHeadroom(expectedLimit)) {
         return 0;
     }
 
-    uint16_t maxOutputIncrease = getConfiguredMaxPowerWatts() - getExpectedOutputAcWatts();
-    uint16_t maxLimitIncrease = inverterMaxLimit - getExpectedLimitWatts();
-
-    // when overscaling is disabled and PDL is not supported,
-    // we must reduce the max limit increase because the limit will be divided
-    // across all mppts.
-    if (!_config.UseOverscaling && !_spInverter->supportsPowerDistributionLogic()) {
-        maxLimitIncrease = (maxLimitIncrease / totalMppts) * nonLimitedMppts;
-    }
-
-    // find the max total increase
-    uint16_t maxTotalIncrease = std::min(maxOutputIncrease, maxLimitIncrease);
-
-    // calculated increase should not exceed the max total increase
-    return std::min(maxTotalIncrease, nonShadedMaxIncrease);
+    return getMaxIncreaseWatts();
 }
 
 uint16_t PowerLimiterSolarInverter::applyReduction(uint16_t reduction, bool)
@@ -104,15 +114,44 @@ uint16_t PowerLimiterSolarInverter::applyReduction(uint16_t reduction, bool)
 
     if (reduction == 0) { return 0; }
 
-    uint16_t currentOutputAcWatts = getExpectedOutputAcWatts();
+    auto const expectedOutput = getExpectedOutputAcWatts();
+    if (expectedOutput <= _config.LowerPowerLimit) { return 0; }
 
-    if ((currentOutputAcWatts - _config.LowerPowerLimit) >= reduction) {
-        setAcOutput(currentOutputAcWatts - reduction);
-        return reduction;
+    auto const reducibleOutput = static_cast<uint16_t>(
+            expectedOutput - _config.LowerPowerLimit);
+    auto const actualReduction = std::min(reduction, reducibleOutput);
+    auto const targetOutput = static_cast<uint16_t>(
+            expectedOutput - actualReduction);
+    auto const expectedLimit = getExpectedLimitWatts();
+    auto const targetLimit = static_cast<uint16_t>(
+            expectedLimit > actualReduction
+                ? expectedLimit - actualReduction
+                : _config.LowerPowerLimit);
+
+    setAcOutputAndLimit(targetOutput, targetLimit);
+    return actualReduction;
+}
+
+bool PowerLimiterSolarInverter::capOutputLimit(uint16_t outputLimitWatts)
+{
+    if (!isEligible() || !isProducing() || hasPendingTarget() || isUsingAssumedOutput()) {
+        return false;
     }
 
-    setAcOutput(_config.LowerPowerLimit);
-    return currentOutputAcWatts - _config.LowerPowerLimit;
+    auto currentOutput = getExpectedOutputAcWatts();
+    auto outputLimit = std::max(outputLimitWatts, currentOutput);
+    outputLimit = std::min(outputLimit, getConfiguredMaxPowerWatts());
+    outputLimit = std::max(outputLimit, _config.LowerPowerLimit);
+
+    auto targetLimit = overscalingEnabled()
+        ? scaleLimitForOutputCap(outputLimit)
+        : outputLimit;
+    if (targetLimit >= getExpectedLimitWatts()) { return false; }
+
+    setExpectedOutputAcWatts(currentOutput);
+    setTargetPowerLimitWatts(targetLimit);
+    setTargetPowerState(true);
+    return true;
 }
 
 uint16_t PowerLimiterSolarInverter::standby()

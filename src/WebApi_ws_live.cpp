@@ -129,20 +129,11 @@ void WebApiWsLiveClass::generateOnBatteryJsonResponse(JsonVariant& root, bool al
         gridChargerObj["enabled"] = config.GridCharger.Enabled;
 
         if (config.GridCharger.Enabled) {
-            auto const powerLimiterManaged = PowerLimiter.isGridChargerManaged();
-            gridChargerObj["powerLimiterManaged"] = powerLimiterManaged;
+            gridChargerObj["powerLimiterManaged"] = PowerLimiter.ownsGridChargerTarget();
 
             auto oInputPower = gridChargerStats->getInputPower();
             float pwr = oInputPower.value_or(0.0f);
             addTotalField(gridChargerObj, "Power", pwr, "W", 2);
-
-            if (config.GridCharger.AutoPowerEnabled) {
-                addTotalField(gridChargerObj, "targetPowerConsumption",
-                        powerLimiterManaged
-                            ? PowerLimiter.getStorageTargetPowerConsumption()
-                            : GridCharger.getAutoPowerTargetPowerConsumption(),
-                        "W", 0);
-            }
         }
 
         if (!all) { _lastPublishGridCharger = millis(); }
@@ -192,8 +183,8 @@ void WebApiWsLiveClass::generateOnBatteryJsonResponse(JsonVariant& root, bool al
         powerLimiterObj["enabled"] = config.PowerLimiter.Enabled;
 
         if (config.PowerLimiter.Enabled && PowerLimiter.usesBatteryPoweredInverter()) {
-            addTotalField(powerLimiterObj, "batteryTargetPowerConsumption",
-                    PowerLimiter.getBatteryTargetPowerConsumption(), "W", 0);
+            addTotalField(powerLimiterObj, "storageTargetPowerConsumption",
+                    PowerLimiter.getStorageTargetPowerConsumption(), "W", 1);
         }
 
         if (config.PowerLimiter.Enabled) {
@@ -204,6 +195,7 @@ void WebApiWsLiveClass::generateOnBatteryJsonResponse(JsonVariant& root, bool al
                 flexibleLoadObj["name"] = flexibleLoadConfig.Name;
                 flexibleLoadObj["enabled"] = flexibleLoadConfig.Enabled;
                 flexibleLoadObj["priority"] = flexibleLoadConfig.Priority;
+                flexibleLoadObj["energyMode"] = flexibleLoadConfig.Mode;
                 flexibleLoadObj["configured"] = flexibleLoadConfig.MqttTopic[0] != '\0'
                         || flexibleLoadConfig.PowerMqttTopic[0] != '\0';
                 flexibleLoadObj["state"] = FlexibleLoad.getStateText(index);
@@ -216,6 +208,11 @@ void WebApiWsLiveClass::generateOnBatteryJsonResponse(JsonVariant& root, bool al
                 }
                 addTotalField(flexibleLoadObj, "batterySupportEnergy",
                         FlexibleLoad.getBatterySupportEnergyWh(index), "Wh", 1);
+                if (flexibleLoadConfig.BatteryBufferEnabled
+                        && flexibleLoadConfig.BatteryBufferEnergyLimit > 0) {
+                    addTotalField(flexibleLoadObj, "batterySupportEnergyLimit",
+                            flexibleLoadConfig.BatteryBufferEnergyLimit, "Wh", 1);
+                }
                 addTotalField(flexibleLoadObj, "batteryDischargePower",
                         FlexibleLoad.getBatteryDischargePowerWatts(), "W", 1);
             };
@@ -341,8 +338,11 @@ void WebApiWsLiveClass::generateInverterCommonJsonResponse(JsonObject& root, std
     root["reachable"] = inv->isReachable();
     root["producing"] = inv->isProducing();
     root["limit_relative"] = inv->SystemConfigPara()->getLimitPercent();
-    if (inv->DevInfo()->getMaxPower() > 0) {
-        root["limit_absolute"] = inv->SystemConfigPara()->getLimitPercent() * inv->DevInfo()->getMaxPower() / 100.0;
+    root["max_power"] = inv->getMaxPower();
+    root["detected_max_power"] = inv->getDetectedMaxPower();
+    root["max_power_override"] = inv->getMaxPowerOverride();
+    if (inv->getMaxPower() > 0) {
+        root["limit_absolute"] = inv->SystemConfigPara()->getLimitPercent() * inv->getMaxPower() / 100.0;
     } else {
         root["limit_absolute"] = -1;
     }

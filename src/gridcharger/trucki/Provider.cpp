@@ -18,18 +18,13 @@ static const char* TAG = "gridCharger";
 static const char* SUBTAG = "Trucki";
 
 static constexpr unsigned int udpPort = 4211;  // trucki T2xG port
-static constexpr uint32_t AutoPowerTargetZeroHoldMillis = 10 * 1000;
 static WiFiUDP TruckiUdp;
 
 namespace GridChargers::Trucki {
 
 namespace {
 
-bool millisAtOrAfter(uint32_t timestamp, uint32_t reference)
-{
-    auto constexpr halfOfAllMillis = std::numeric_limits<uint32_t>::max() / 2;
-    return (timestamp - reference) < halfOfAllMillis;
-}
+constexpr float AutoPowerBmsCurrentMargin = 0.5f;
 
 uint16_t wattsToUint16(float watts)
 {
@@ -39,7 +34,65 @@ uint16_t wattsToUint16(float watts)
             static_cast<float>(std::numeric_limits<uint16_t>::max())));
 }
 
+int16_t wattsToInt16(float watts)
+{
+    return static_cast<int16_t>(std::clamp<float>(
+            std::round(watts),
+            static_cast<float>(std::numeric_limits<int16_t>::min()),
+            static_cast<float>(std::numeric_limits<int16_t>::max())));
+}
+
 } // namespace
+
+bool Provider::shouldBlockAutoPowerByBatteryState(
+        bool batterySoCValid,
+        float batterySoC,
+        bool bmsChargeBlocked) const
+{
+    auto const& config = Configuration.get();
+    if (!config.Battery.Enabled || !config.GridCharger.AutoPowerBatterySoCLimitsEnabled) {
+        _autoPowerBlockedByBatteryState = false;
+        return false;
+    }
+
+    if (!batterySoCValid) {
+        return _autoPowerBlockedByBatteryState;
+    }
+
+    auto const stopBatterySoCThreshold = GridCharger.getAutoPowerStopBatterySoCThreshold();
+    auto const configuredReenableBatterySoCThreshold = std::min<uint8_t>(
+            config.GridCharger.AutoPowerReenableBatterySoCThreshold,
+            ::GridChargers::Controller::MaxConfiguredSoCPercent);
+    auto const reenableBatterySoCThreshold = std::min<uint8_t>(
+            configuredReenableBatterySoCThreshold,
+            stopBatterySoCThreshold > 0 ? stopBatterySoCThreshold - 1 : 0);
+
+    if (_autoPowerBlockedByBatteryState) {
+        if (!bmsChargeBlocked && batterySoC <= reenableBatterySoCThreshold) {
+            _autoPowerBlockedByBatteryState = false;
+            DTU_LOGI("Re-enabling automatic charging because battery SoC %.1f reached threshold %u",
+                    batterySoC, reenableBatterySoCThreshold);
+        } else {
+            return true;
+        }
+    }
+
+    if (batterySoC >= stopBatterySoCThreshold) {
+        _autoPowerBlockedByBatteryState = true;
+        DTU_LOGI("Stopping charger because battery SoC %.1f reached stop threshold %u; re-enable at %u",
+                batterySoC, stopBatterySoCThreshold, reenableBatterySoCThreshold);
+        return true;
+    }
+
+    if (bmsChargeBlocked) {
+        _autoPowerBlockedByBatteryState = true;
+        DTU_LOGI("Stopping charger because the BMS reports charging not possible; re-enable at SoC %u",
+                reenableBatterySoCThreshold);
+        return true;
+    }
+
+    return false;
+}
 
 bool Provider::init()
 {
@@ -88,7 +141,9 @@ bool Provider::init()
 
 int16_t Provider::getAutoPowerTargetPowerConsumption() const
 {
-    if (isAutoPowerTargetPowerConsumptionZeroHoldActive()) { return 0; }
+    if (PowerLimiter.ownsGridChargerTarget()) {
+        return wattsToInt16(PowerLimiter.getStorageTargetPowerConsumption());
+    }
 
     auto const target = std::round(Configuration.get().GridCharger.AutoPowerTargetPowerConsumption);
     return static_cast<int16_t>(std::clamp(
@@ -100,7 +155,7 @@ int16_t Provider::getAutoPowerTargetPowerConsumption() const
 std::optional<uint32_t> Provider::getPowerLimiterOutputReferenceMillis() const
 {
     if (_powerLimiterCommandMillis != 0) {
-        return _powerLimiterCommandMillis + 4 * DATA_POLLING_INTERVAL_MS;
+        return _powerLimiterCommandMillis + _powerLimiterCommandEffectAssumptionMillis;
     }
 
     auto const statsMillis = _stats->getLastUpdate();
@@ -114,6 +169,11 @@ std::optional<uint32_t> Provider::getPowerLimiterOutputReferenceMillis() const
 uint16_t Provider::getPowerLimiterCurrentInputPowerWatts() const
 {
     return wattsToUint16(_dataCurrent.get<DataPointLabel::AcPower>().value_or(0.0f));
+}
+
+std::optional<uint16_t> Provider::getPowerLimiterTargetInputPowerWatts() const
+{
+    return _oPowerLimiterTargetInputPowerWatts;
 }
 
 uint16_t Provider::getPowerLimiterExpectedInputPowerWatts() const
@@ -143,16 +203,23 @@ float Provider::getPowerLimiterMaxInputPowerWattsFloat() const
 
     auto stats = Battery.getStats();
     if (config.Battery.Enabled && config.GridCharger.AutoPowerBatterySoCLimitsEnabled) {
-        auto const batterySoC = stats->getSoC();
-        auto const stopBatterySoCThreshold = GridCharger.getAutoPowerStopBatterySoCThreshold();
-        if (batterySoC >= stopBatterySoCThreshold) { return 0.0f; }
+        auto const bmsChargeBlocked = stats->isChargeCurrentLimitValid()
+            && stats->getChargeCurrentLimit() <= AutoPowerBmsCurrentMargin;
+        if (shouldBlockAutoPowerByBatteryState(
+                    stats->isSoCValid(),
+                    stats->getSoC(),
+                    bmsChargeBlocked)) {
+            return 0.0f;
+        }
     }
 
     auto efficiency = _dataCurrent.get<DataPointLabel::Efficiency>().value_or(90.0f) / 100.0f;
     efficiency = efficiency > 0.5f ? efficiency : 0.9f;
 
     float maxInputPower = *oMaxAcPower;
-    auto const plannedOutputPowerLimit = GridCharger.getAutoPowerSocPlanningOutputPowerLimit(*oOutputPower);
+    auto const plannedOutputPowerLimit = GridCharger.getAutoPowerSocPlanningOutputPowerLimit(
+            *oOutputPower,
+            static_cast<float>(getPowerLimiterExpectedInputPowerWatts()) * efficiency);
     if (plannedOutputPowerLimit) {
         maxInputPower = std::min(maxInputPower, *plannedOutputPowerLimit / efficiency);
     }
@@ -173,6 +240,92 @@ uint16_t Provider::getPowerLimiterMaxInputPowerWatts() const
     return wattsToUint16(getPowerLimiterMaxInputPowerWattsFloat());
 }
 
+std::optional<::GridChargers::PowerLimiterControlProposal>
+Provider::getPowerLimiterControlProposal(uint16_t targetInputPowerWatts) const
+{
+    ::GridChargers::PowerLimiterControlProposal proposal;
+    proposal.targetInputPowerWatts = targetInputPowerWatts;
+
+    auto const& config = Configuration.get();
+    if (!config.GridCharger.Enabled || !config.GridCharger.AutoPowerEnabled) {
+        proposal.limitedByAvailablePower = targetInputPowerWatts > 0;
+        proposal.targetInputPowerWatts = 0;
+        return proposal;
+    }
+
+    if (millis() - _dataCurrent.getLastUpdate() > 30 * 1000) {
+        proposal.limitedByAvailablePower = targetInputPowerWatts > 0;
+        proposal.targetInputPowerWatts = 0;
+        return proposal;
+    }
+
+    auto oMaxAcPower = _dataCurrent.get<DataPointLabel::MaxAcPower>();
+    auto oOutputPower = _dataCurrent.get<DataPointLabel::DcPower>();
+    auto oOutputVoltage = _dataCurrent.get<DataPointLabel::DcVoltage>();
+    auto oOutputCurrent = _dataCurrent.get<DataPointLabel::DcCurrent>();
+    auto oMinAcPower = _dataCurrent.get<DataPointLabel::MinAcPower>();
+    if (!oMaxAcPower || !oOutputPower || !oOutputVoltage || !oOutputCurrent
+            || *oOutputVoltage <= 0.0f) {
+        proposal.limitedByAvailablePower = targetInputPowerWatts > 0;
+        proposal.targetInputPowerWatts = 0;
+        return proposal;
+    }
+
+    auto stats = Battery.getStats();
+    if (config.Battery.Enabled && config.GridCharger.AutoPowerBatterySoCLimitsEnabled) {
+        auto const bmsChargeBlocked = stats->isChargeCurrentLimitValid()
+            && stats->getChargeCurrentLimit() <= AutoPowerBmsCurrentMargin;
+        if (shouldBlockAutoPowerByBatteryState(
+                    stats->isSoCValid(),
+                    stats->getSoC(),
+                    bmsChargeBlocked)) {
+            proposal.limitedByAvailablePower = targetInputPowerWatts > 0;
+            proposal.targetInputPowerWatts = 0;
+            return proposal;
+        }
+    }
+
+    auto efficiency = _dataCurrent.get<DataPointLabel::Efficiency>().value_or(90.0f) / 100.0f;
+    efficiency = efficiency > 0.5f ? efficiency : 0.9f;
+
+    float maxInputPower = *oMaxAcPower;
+    auto const plannedOutputPowerLimit = GridCharger.getAutoPowerSocPlanningOutputPowerLimit(
+            *oOutputPower,
+            static_cast<float>(targetInputPowerWatts) * efficiency);
+    if (plannedOutputPowerLimit) {
+        maxInputPower = std::min(maxInputPower, *plannedOutputPowerLimit / efficiency);
+    }
+
+    if (config.Battery.Enabled && stats->isChargeCurrentLimitValid() && stats->isCurrentValid()) {
+        float permissibleCurrent = stats->getChargeCurrentLimit()
+            - (stats->getChargeCurrent() - *oOutputCurrent);
+        permissibleCurrent = std::max(permissibleCurrent, 0.0f);
+        maxInputPower = std::min(maxInputPower,
+                (permissibleCurrent * *oOutputVoltage) / efficiency);
+    }
+
+    auto proposed = std::min(
+            targetInputPowerWatts,
+            wattsToUint16(std::max(0.0f, maxInputPower)));
+    auto const minInputPower = wattsToUint16(
+            oMinAcPower.value_or(config.GridCharger.AutoPowerLowerPowerLimit));
+    if (proposed > 0 && proposed < minInputPower) {
+        proposed = 0;
+    }
+
+    proposal.limitedByAvailablePower = proposed < targetInputPowerWatts;
+    proposal.targetInputPowerWatts = proposed;
+    return proposal;
+}
+
+std::vector<::GridChargers::PowerLimiterTargetDispatchEvent>
+Provider::consumePowerLimiterTargetDispatchEvents()
+{
+    auto events = _powerLimiterTargetDispatchEvents;
+    _powerLimiterTargetDispatchEvents.clear();
+    return events;
+}
+
 uint16_t Provider::applyPowerLimiterInputPowerIncrease(uint16_t increase)
 {
     if (increase == 0) { return 0; }
@@ -191,7 +344,9 @@ uint16_t Provider::applyPowerLimiterInputPowerIncrease(uint16_t increase)
             maximum));
     setRequestedPowerAc(target);
     _oPowerLimiterTargetInputPowerWatts = target;
-    _powerLimiterCommandMillis = millis();
+    _oPowerLimiterDispatchPendingTargetInputPowerWatts = target;
+    _oPowerLimiterDispatchPendingTargetEffectAssumptionMillis =
+        ::GridChargers::powerLimiterTargetEffectAssumptionMillis(expected, target);
     _autoModeBlockedTillMillis = millis() + 4 * DATA_POLLING_INTERVAL_MS;
     _autoPowerEnabled = target > 0;
     return target > expected ? target - expected : 0;
@@ -214,7 +369,9 @@ uint16_t Provider::applyPowerLimiterInputPowerReduction(uint16_t reduction)
 
     setRequestedPowerAc(target);
     _oPowerLimiterTargetInputPowerWatts = target;
-    _powerLimiterCommandMillis = millis();
+    _oPowerLimiterDispatchPendingTargetInputPowerWatts = target;
+    _oPowerLimiterDispatchPendingTargetEffectAssumptionMillis =
+        ::GridChargers::powerLimiterTargetEffectAssumptionMillis(expected, target);
     _autoModeBlockedTillMillis = millis() + 4 * DATA_POLLING_INTERVAL_MS;
     _autoPowerEnabled = target > 0;
     return expected - target;
@@ -366,26 +523,27 @@ void Provider::powerControlLoop()
             DTU_LOGV("powerTotal: %.0f, outputPower: %.01f, targetPowerConsumption: %d, newPowerLimit: %.0f",
                     powerTotal, *oOutputPower, targetPowerConsumption, newPowerLimit);
 
-            bool stopRequestedByBatterySoC = false;
+            bool stopRequestedByBatteryState = false;
 
-            // Check whether the battery SoC limit setting is enabled
             if (config.Battery.Enabled && config.GridCharger.AutoPowerBatterySoCLimitsEnabled) {
-                auto const batterySoC = Battery.getStats()->getSoC();
-                auto const stopBatterySoCThreshold = GridCharger.getAutoPowerStopBatterySoCThreshold();
-                // Sets power limit to 0 if the BMS reported SoC reaches or exceeds the user configured value
-                if (batterySoC >= stopBatterySoCThreshold) {
-                    stopRequestedByBatterySoC = true;
+                auto const bmsChargeBlocked = stats->isChargeCurrentLimitValid()
+                    && stats->getChargeCurrentLimit() <= AutoPowerBmsCurrentMargin;
+                if (shouldBlockAutoPowerByBatteryState(
+                            stats->isSoCValid(),
+                            stats->getSoC(),
+                            bmsChargeBlocked)) {
+                    stopRequestedByBatteryState = true;
                     _autoPowerLimitedByAvailablePower = false;
                     newPowerLimit = 0;
-                    DTU_LOGV("Current battery SoC %.1f reached stop threshold %i, set newPowerLimit to %f",
-                            batterySoC, stopBatterySoCThreshold, newPowerLimit);
                 }
             }
 
             auto efficiency = _dataCurrent.get<DataPointLabel::Efficiency>().value_or(90) / 100.0f;
             efficiency = efficiency > 0.5f ? efficiency : 0.9f;
 
-            auto const plannedOutputPowerLimit = GridCharger.getAutoPowerSocPlanningOutputPowerLimit(*oOutputPower);
+            auto const plannedOutputPowerLimit = GridCharger.getAutoPowerSocPlanningOutputPowerLimit(
+                    *oOutputPower,
+                    newPowerLimit * efficiency);
             if (plannedOutputPowerLimit) {
                 newPowerLimit = std::min(newPowerLimit, *plannedOutputPowerLimit / efficiency);
             }
@@ -393,7 +551,7 @@ void Provider::powerControlLoop()
             if (plannedOutputPowerLimit) {
                 autoPowerLimit = std::min(autoPowerLimit, *plannedOutputPowerLimit / efficiency);
             }
-            _autoPowerLimitedByAvailablePower = !stopRequestedByBatterySoC
+            _autoPowerLimitedByAvailablePower = !stopRequestedByBatteryState
                 && newPowerLimit < autoPowerLimit;
 
             if (newPowerLimit >= *oMinAcPower) {
@@ -434,33 +592,7 @@ void Provider::powerControlLoop()
 
 void Provider::setRequestedPowerAc(float power)
 {
-    if (_requestedPowerAc <= 0.0f && power > 0.0f) {
-        holdAutoPowerTargetPowerConsumptionAtZero();
-    }
-
     _requestedPowerAc = power;
-}
-
-void Provider::holdAutoPowerTargetPowerConsumptionAtZero()
-{
-    if (PowerLimiter.isGridChargerManaged()) {
-        _autoPowerTargetPowerConsumptionZeroHoldTillMillis = 0;
-        return;
-    }
-
-    bool const wasActive = isAutoPowerTargetPowerConsumptionZeroHoldActive();
-    _autoPowerTargetPowerConsumptionZeroHoldTillMillis = millis() + AutoPowerTargetZeroHoldMillis;
-
-    if (!wasActive) {
-        DTU_LOGI("Holding charger grid target at 0 W for %u s while startup settles",
-                AutoPowerTargetZeroHoldMillis / 1000);
-    }
-}
-
-bool Provider::isAutoPowerTargetPowerConsumptionZeroHoldActive() const
-{
-    auto const holdTillMillis = _autoPowerTargetPowerConsumptionZeroHoldTillMillis;
-    return holdTillMillis != 0 && !millisAtOrAfter(millis(), holdTillMillis);
 }
 
 void Provider::sendControlCommandRequest()
@@ -479,9 +611,27 @@ void Provider::sendControlCommandRequest()
 
     TruckiUdp.beginPacket(config.GridCharger.Trucki.IpAddress, udpPort);
     TruckiUdp.print(String(acPowerSetpoint));
-    TruckiUdp.endPacket();
+    auto const sent = TruckiUdp.endPacket() > 0;
+    auto const sentMillis = millis();
 
-    _lastControlCommandRequestMillis = millis();
+    _lastControlCommandRequestMillis = sentMillis;
+    auto const requestedPower = wattsToUint16(_requestedPowerAc);
+    if (sent
+            && _oPowerLimiterDispatchPendingTargetInputPowerWatts
+            && *_oPowerLimiterDispatchPendingTargetInputPowerWatts == requestedPower) {
+        auto const targetEffectAssumptionMillis =
+            _oPowerLimiterDispatchPendingTargetEffectAssumptionMillis.value_or(
+                    ::GridChargers::PowerLimiterNormalTargetEffectAssumptionMillis);
+        _powerLimiterCommandMillis = sentMillis;
+        _powerLimiterCommandEffectAssumptionMillis = targetEffectAssumptionMillis;
+        _powerLimiterTargetDispatchEvents.push_back({
+            requestedPower,
+            sentMillis,
+            targetEffectAssumptionMillis,
+        });
+        _oPowerLimiterDispatchPendingTargetInputPowerWatts = std::nullopt;
+        _oPowerLimiterDispatchPendingTargetEffectAssumptionMillis = std::nullopt;
+    }
 }
 
 void Provider::parseControlCommandResponse()

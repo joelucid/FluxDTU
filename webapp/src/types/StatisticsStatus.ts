@@ -91,6 +91,14 @@ export interface StatisticsStatus {
     flexible_loads?: StatisticsFlexibleLoad[];
     inverters?: StatisticsInverter[];
     panels?: StatisticsPanel[];
+    request_history_seconds?: number;
+    request_history_capacity?: number;
+    request_history_psram?: boolean;
+    request_history_bytes?: number;
+    request_since?: number;
+    request_incremental?: boolean;
+    request_sections?: StatisticsRequestSection[];
+    requests?: StatisticsRequest[];
     sample_fields?: string[];
     samples?: StatisticsSample[];
     days?: StatisticsDay[];
@@ -124,6 +132,44 @@ export interface StatisticsPanel {
     order: number;
     max_power: number;
     energy_wh: number;
+}
+
+export interface StatisticsRequestSection {
+    key: string;
+    source: string;
+    serial?: string;
+    inverter_index?: number;
+    order: number;
+    enabled: boolean;
+    name: string;
+}
+
+export interface StatisticsRequest {
+    key: string;
+    seq: number;
+    section_key: string;
+    source: string;
+    serial?: string;
+    inverter_index?: number;
+    domain: string;
+    cause: string;
+    status: string;
+    effect_kind: string;
+    transition: string;
+    command?: string;
+    created: number;
+    updated: number;
+    sent?: number;
+    ack?: number;
+    not_before_effect?: number;
+    earliest_expected?: number;
+    typical_effect?: number;
+    latest_effect?: number;
+    base_w: number;
+    target_w: number;
+    delta_w: number;
+    capacity_full_output_possible: boolean;
+    dispatch_pending?: boolean;
 }
 
 export interface StatisticsBatteryBoostEstimator {

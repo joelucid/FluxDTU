@@ -7,6 +7,7 @@
 #include <gridcharger/huawei/Provider.h>
 #include <PowerLimiter.h>
 #include "Configuration.h"
+#include "defaults.h"
 #include "OperationProfiles.h"
 #include "PinMapping.h"
 #include "WebApi.h"
@@ -167,7 +168,7 @@ void WebApiGridChargerClass::onAdminGet(AsyncWebServerRequest* request)
     auto const& config = Configuration.get();
 
     ConfigurationClass::serializeGridChargerConfig(config.GridCharger, root);
-    root["power_limiter_managed"] = PowerLimiter.isGridChargerManaged();
+    root["power_limiter_managed"] = PowerLimiter.ownsGridChargerTarget();
 
     auto can = root["can"].to<JsonObject>();
     ConfigurationClass::serializeGridChargerCanConfig(config.GridCharger.Can, can);
@@ -200,6 +201,10 @@ void WebApiGridChargerClass::onAdminPost(AsyncWebServerRequest* request)
         !(root["provider"].is<uint8_t>()) ||
         !(root["can"]["controller_frequency"].is<uint32_t>()) ||
         !(root["auto_power_enabled"].is<bool>()) ||
+        !(root["auto_power_batterysoc_limits_enabled"].is<bool>()) ||
+        !(root["auto_power_ignore_bms_current"].is<bool>()) ||
+        !((root["auto_power_bms_charge_current_margin"].isNull())
+                || root["auto_power_bms_charge_current_margin"].is<float>()) ||
         !(root["emergency_charge_enabled"].is<bool>()) ||
         !(root["huawei"]["offline_voltage"].is<float>()) ||
         !(root["huawei"]["offline_current"].is<float>()) ||
@@ -211,10 +216,18 @@ void WebApiGridChargerClass::onAdminPost(AsyncWebServerRequest* request)
         !(root["voltage_limit"].is<float>()) ||
         !(root["lower_power_limit"].is<float>()) ||
         !(root["upper_power_limit"].is<float>()) ||
+        !(root["stop_batterysoc_threshold"].is<uint8_t>()) ||
+        !(root["reenable_batterysoc_threshold"].is<uint8_t>()) ||
         !(root["auto_power_soc_planning_enabled"].is<bool>()) ||
         !(root["auto_power_soc_planning_day_min_soc"].is<uint8_t>()) ||
+        !((root["auto_power_soc_planning_intermediate_target_soc"].isNull())
+                || root["auto_power_soc_planning_intermediate_target_soc"].is<uint8_t>()) ||
         !(root["auto_power_soc_planning_night_target_soc"].is<uint8_t>()) ||
         !(root["auto_power_soc_planning_start_after_sunrise"].is<uint16_t>()) ||
+        !((root["auto_power_soc_planning_intermediate_before_sunset"].isNull())
+                || root["auto_power_soc_planning_intermediate_before_sunset"].is<uint16_t>()) ||
+        !((root["auto_power_soc_planning_final_ramp_start_before_sunset"].isNull())
+                || root["auto_power_soc_planning_final_ramp_start_before_sunset"].is<uint16_t>()) ||
         !(root["auto_power_soc_planning_finish_before_sunset"].is<uint16_t>()) ||
         !(root["auto_power_soc_planning_battery_capacity"].is<uint32_t>()) ||
         !(root["auto_power_soc_planning_power_limit_enabled"].is<bool>()) ||
@@ -258,10 +271,54 @@ void WebApiGridChargerClass::onAdminPost(AsyncWebServerRequest* request)
         return;
     }
 
+    auto const bmsChargeCurrentMargin = root["auto_power_bms_charge_current_margin"].isNull()
+        ? static_cast<float>(GRIDCHARGER_AUTO_POWER_BMS_CHARGE_CURRENT_MARGIN)
+        : root["auto_power_bms_charge_current_margin"].as<float>();
+    if (bmsChargeCurrentMargin < HuaweiProvider::MIN_AUTO_POWER_BMS_CHARGE_CURRENT_MARGIN
+            || bmsChargeCurrentMargin > HuaweiProvider::MAX_AUTO_POWER_BMS_CHARGE_CURRENT_MARGIN) {
+        failValidation("Invalid BMS charge-current margin!");
+        return;
+    }
+
+    auto const stopBatterySoc = root["stop_batterysoc_threshold"].as<uint8_t>();
+    auto const reenableBatterySoc = root["reenable_batterysoc_threshold"].as<uint8_t>();
     auto const dayMinSoc = root["auto_power_soc_planning_day_min_soc"].as<uint8_t>();
     auto const nightTargetSoc = root["auto_power_soc_planning_night_target_soc"].as<uint8_t>();
-    if (dayMinSoc > 100 || nightTargetSoc > 100 || dayMinSoc > nightTargetSoc) {
+    auto const intermediateTargetSoc = root["auto_power_soc_planning_intermediate_target_soc"].isNull()
+        ? nightTargetSoc
+        : root["auto_power_soc_planning_intermediate_target_soc"].as<uint8_t>();
+    auto const finishBeforeSunset = root["auto_power_soc_planning_finish_before_sunset"].as<uint16_t>();
+    auto const intermediateBeforeSunset = root["auto_power_soc_planning_intermediate_before_sunset"].isNull()
+        ? finishBeforeSunset
+        : root["auto_power_soc_planning_intermediate_before_sunset"].as<uint16_t>();
+    auto const finalRampStartBeforeSunset = root["auto_power_soc_planning_final_ramp_start_before_sunset"].isNull()
+        ? intermediateBeforeSunset
+        : root["auto_power_soc_planning_final_ramp_start_before_sunset"].as<uint16_t>();
+    if (stopBatterySoc < 2 || stopBatterySoc > GridChargers::Controller::MaxConfiguredSoCPercent) {
+        failValidation("Invalid stop SoC threshold!");
+        return;
+    }
+
+    if (reenableBatterySoc >= stopBatterySoc
+            || reenableBatterySoc > GridChargers::Controller::MaxConfiguredSoCPercent) {
+        failValidation("Invalid re-enable SoC threshold!");
+        return;
+    }
+
+    if (dayMinSoc > GridChargers::Controller::MaxConfiguredSoCPercent
+            || intermediateTargetSoc > GridChargers::Controller::MaxConfiguredSoCPercent
+            || nightTargetSoc > GridChargers::Controller::MaxConfiguredSoCPercent
+            || dayMinSoc > intermediateTargetSoc
+            || intermediateTargetSoc > nightTargetSoc) {
         failValidation("Invalid SoC planning range!");
+        return;
+    }
+
+    if (intermediateBeforeSunset < finalRampStartBeforeSunset
+            || finalRampStartBeforeSunset < finishBeforeSunset
+            || (finalRampStartBeforeSunset == finishBeforeSunset
+                && intermediateTargetSoc != nightTargetSoc)) {
+        failValidation("Invalid SoC planning stage timing!");
         return;
     }
 

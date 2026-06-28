@@ -175,6 +175,29 @@
                             />
 
                             <InputElement
+                                v-if="gridChargerConfigList.auto_power_enabled && gridChargerConfigList.provider === 0"
+                                :label="$t('gridchargeradmin.IgnoreBmsCurrent')"
+                                :tooltip="$t('gridchargeradmin.IgnoreBmsCurrentHint')"
+                                v-model="gridChargerConfigList.auto_power_ignore_bms_current"
+                                type="checkbox"
+                                wide
+                            />
+
+                            <InputElement
+                                v-if="gridChargerConfigList.auto_power_enabled && gridChargerConfigList.provider === 0"
+                                :label="$t('gridchargeradmin.BmsChargeCurrentMargin')"
+                                :tooltip="$t('gridchargeradmin.BmsChargeCurrentMarginHint')"
+                                v-model="gridChargerConfigList.auto_power_bms_charge_current_margin"
+                                postfix="A"
+                                type="number"
+                                wide
+                                required
+                                step="0.1"
+                                min="0"
+                                max="5"
+                            />
+
+                            <InputElement
                                 :label="$t('gridchargeradmin.EnableEmergencyCharge')"
                                 :tooltip="$t('gridchargeradmin.EnableEmergencyChargeHint')"
                                 v-model="gridChargerConfigList.emergency_charge_enabled"
@@ -284,7 +307,7 @@
                                 type="number"
                                 wide
                                 required
-                                min="50"
+                                min="5"
                                 max="4000"
                             />
 
@@ -300,74 +323,6 @@
                                 min="100"
                                 max="4000"
                             />
-
-                            <InputElement
-                                :label="$t('gridchargeradmin.targetPowerConsumption')"
-                                :tooltip="$t('gridchargeradmin.targetPowerConsumptionHint')"
-                                v-model="gridChargerConfigList.target_power_consumption"
-                                v-if="
-                                    gridChargerConfigList.auto_power_enabled &&
-                                    !gridChargerConfigList.power_limiter_managed
-                                "
-                                postfix="W"
-                                type="number"
-                                wide
-                                required
-                            />
-
-                            <InputElement
-                                :label="$t('gridchargeradmin.TargetPowerConsumptionDynamicEnabled')"
-                                :tooltip="$t('gridchargeradmin.TargetPowerConsumptionDynamicEnabledHint')"
-                                v-model="gridChargerConfigList.target_power_consumption_dynamic_enabled"
-                                v-if="
-                                    gridChargerConfigList.auto_power_enabled &&
-                                    gridChargerConfigList.provider === 0 &&
-                                    !gridChargerConfigList.power_limiter_managed
-                                "
-                                type="checkbox"
-                                wide
-                            />
-
-                            <template
-                                v-if="
-                                    gridChargerConfigList.auto_power_enabled &&
-                                    gridChargerConfigList.provider === 0 &&
-                                    !gridChargerConfigList.power_limiter_managed &&
-                                    gridChargerConfigList.target_power_consumption_dynamic_enabled
-                                "
-                            >
-                                <InputElement
-                                    :label="$t('gridchargeradmin.TargetPowerConsumptionDynamicMax')"
-                                    :tooltip="$t('gridchargeradmin.TargetPowerConsumptionDynamicMaxHint')"
-                                    v-model="gridChargerConfigList.target_power_consumption_dynamic_max"
-                                    postfix="W"
-                                    type="number"
-                                    min="0"
-                                    max="32767"
-                                    wide
-                                />
-
-                                <InputElement
-                                    :label="$t('gridchargeradmin.TargetPowerConsumptionDynamicMultiplier')"
-                                    :tooltip="$t('gridchargeradmin.TargetPowerConsumptionDynamicMultiplierHint')"
-                                    v-model="gridChargerConfigList.target_power_consumption_dynamic_multiplier"
-                                    postfix="x"
-                                    type="number"
-                                    min="0"
-                                    step="0.1"
-                                    wide
-                                />
-
-                                <InputElement
-                                    :label="$t('gridchargeradmin.TargetPowerConsumptionDynamicWindow')"
-                                    :tooltip="$t('gridchargeradmin.TargetPowerConsumptionDynamicWindowHint')"
-                                    v-model="gridChargerConfigList.target_power_consumption_dynamic_window"
-                                    postfix="s"
-                                    type="number"
-                                    min="10"
-                                    wide
-                                />
-                            </template>
                         </CardElement>
                     </div>
                 </template>
@@ -390,6 +345,18 @@
                                 wide
                                 required
                                 min="2"
+                                max="101"
+                            />
+
+                            <InputElement
+                                :label="$t('gridchargeradmin.ReenableBatterySoCThreshold')"
+                                :tooltip="$t('gridchargeradmin.ReenableBatterySoCThresholdHint')"
+                                v-model="gridChargerConfigList.reenable_batterysoc_threshold"
+                                postfix="%"
+                                type="number"
+                                wide
+                                required
+                                min="0"
                                 max="100"
                             />
 
@@ -411,7 +378,43 @@
                                     wide
                                     required
                                     min="0"
-                                    max="100"
+                                    max="101"
+                                />
+
+                                <InputElement
+                                    :label="$t('gridchargeradmin.SocPlanningStartAfterSunrise')"
+                                    :tooltip="$t('gridchargeradmin.SocPlanningStartAfterSunriseHint')"
+                                    v-model="gridChargerConfigList.auto_power_soc_planning_start_after_sunrise"
+                                    postfix="min"
+                                    type="number"
+                                    wide
+                                    required
+                                    min="0"
+                                    max="720"
+                                />
+
+                                <InputElement
+                                    :label="$t('gridchargeradmin.SocPlanningIntermediateTargetSoc')"
+                                    :tooltip="$t('gridchargeradmin.SocPlanningIntermediateTargetSocHint')"
+                                    v-model="gridChargerConfigList.auto_power_soc_planning_intermediate_target_soc"
+                                    postfix="%"
+                                    type="number"
+                                    wide
+                                    required
+                                    min="0"
+                                    max="101"
+                                />
+
+                                <InputElement
+                                    :label="$t('gridchargeradmin.SocPlanningIntermediateBeforeSunset')"
+                                    :tooltip="$t('gridchargeradmin.SocPlanningIntermediateBeforeSunsetHint')"
+                                    v-model="gridChargerConfigList.auto_power_soc_planning_intermediate_before_sunset"
+                                    postfix="min"
+                                    type="number"
+                                    wide
+                                    required
+                                    min="0"
+                                    max="720"
                                 />
 
                                 <InputElement
@@ -423,13 +426,15 @@
                                     wide
                                     required
                                     min="0"
-                                    max="100"
+                                    max="101"
                                 />
 
                                 <InputElement
-                                    :label="$t('gridchargeradmin.SocPlanningStartAfterSunrise')"
-                                    :tooltip="$t('gridchargeradmin.SocPlanningStartAfterSunriseHint')"
-                                    v-model="gridChargerConfigList.auto_power_soc_planning_start_after_sunrise"
+                                    :label="$t('gridchargeradmin.SocPlanningFinalRampStartBeforeSunset')"
+                                    :tooltip="$t('gridchargeradmin.SocPlanningFinalRampStartBeforeSunsetHint')"
+                                    v-model="
+                                        gridChargerConfigList.auto_power_soc_planning_final_ramp_start_before_sunset
+                                    "
                                     postfix="min"
                                     type="number"
                                     wide

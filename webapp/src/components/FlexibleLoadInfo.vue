@@ -33,13 +33,12 @@
                                     </div>
                                     <div v-if="load.power">
                                         <strong>{{ $t('invertertotalinfo.FlexibleLoadPower') }}:</strong>
-                                        {{
-                                            $n(load.power.v, 'decimal', {
-                                                minimumFractionDigits: load.power.d,
-                                                maximumFractionDigits: load.power.d,
-                                            })
-                                        }}
-                                        {{ load.power.u }}
+                                        {{ formatValue(load.power) }}
+                                    </div>
+                                    <div v-if="load.batterySupportEnergy && load.batterySupportEnergyLimit">
+                                        <strong>{{ $t('invertertotalinfo.FlexibleLoadBatteryBudget') }}:</strong>
+                                        {{ formatValue(load.batterySupportEnergy) }} /
+                                        {{ formatValue(load.batterySupportEnergyLimit) }}
                                     </div>
                                     <div>
                                         <strong>{{ $t('invertertotalinfo.FlexibleLoadStartBlockReason') }}:</strong>
@@ -82,7 +81,7 @@
 
 <script lang="ts">
 import CardElement from '@/components/CardElement.vue';
-import type { FlexibleLoad } from '@/types/LiveDataStatus';
+import type { FlexibleLoad, ValueObject } from '@/types/LiveDataStatus';
 import { authHeader, handleResponse } from '@/utils/authentication';
 import { BIconToggleOff, BIconToggleOn } from 'bootstrap-icons-vue';
 import { defineComponent, type PropType } from 'vue';
@@ -116,6 +115,12 @@ export default defineComponent({
         },
         formatFlexibleLoadText(value: string | undefined): string {
             return (value || 'none').replace(/_/g, ' ');
+        },
+        formatValue(value: ValueObject): string {
+            return `${this.$n(value.v, 'decimal', {
+                minimumFractionDigits: value.d,
+                maximumFractionDigits: value.d,
+            })} ${value.u}`;
         },
         isFlexibleLoadSettingLoading(index: number): boolean {
             return this.flexibleLoadSettingLoadingIndex === index;

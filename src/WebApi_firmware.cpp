@@ -47,7 +47,7 @@ void WebApiFirmwareClass::onFirmwareUpdateFinish(AsyncWebServerRequest* request)
     response->addHeader(asyncsrv::T_Connection, asyncsrv::T_close);
     response->addHeader(asyncsrv::T_CORS_ACAO, "*");
     request->send(response);
-    RestartHelper.triggerRestart();
+    RestartHelper.triggerRestart("firmware_update");
 }
 
 void WebApiFirmwareClass::onFirmwareUpdateUpload(AsyncWebServerRequest* request, String filename, size_t index, uint8_t* data, size_t len, bool final)

@@ -198,6 +198,6 @@ void WebApiDeviceClass::onDeviceAdminPost(AsyncWebServerRequest* request)
     WebApi.sendJsonResponse(request, response, __FUNCTION__, __LINE__);
 
     if (performRestart) {
-        RestartHelper.triggerRestart();
+        RestartHelper.triggerRestart("device_config_restart");
     }
 }

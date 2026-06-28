@@ -27,6 +27,7 @@
 #include "NetworkSettings.h"
 #include "NtpSettings.h"
 #include "PinMapping.h"
+#include "ResetDiagnostics.h"
 #include "RestartHelper.h"
 #include "Scheduler.h"
 #include "SunPosition.h"
@@ -48,6 +49,7 @@ void setup()
 {
     // Move all dynamic allocations >512byte to psram (if available)
     heap_caps_malloc_extmem_enable(512);
+    ResetDiagnostics.init();
 
     // Initialize serial output
     Serial.begin(SERIAL_BAUDRATE);

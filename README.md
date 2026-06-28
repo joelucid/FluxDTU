@@ -63,9 +63,9 @@ history, loads, panels, battery behavior, temperatures, and boost operation.
 ![FluxDTU power limiter timeline showing fast transient response](docs/images/power-limiter-transient-response.png)
 
 The power limiter timeline makes FluxDTU's ultra-fast transient response
-visible. Fast catch-up points mark short grid-power excursions and the immediate
-limit reaction that follows; in the test installation this closes transients in
-a few seconds, roughly an order of magnitude faster than the regular OpenDTU /
+visible. The timeline marks short grid-power excursions and the immediate limit
+reaction that follows; in the test installation this closes transients in a few
+seconds, roughly an order of magnitude faster than the regular OpenDTU /
 OpenDTU-OnBattery polling and control path.
 
 ![FluxDTU loads statistics view showing flexible load categories](docs/images/flexible-load-statistics-example.png)
@@ -109,8 +109,8 @@ OpenDTU-OnBattery:
 - [OpenDTU-OnBattery wiki](https://github.com/hoylabs/OpenDTU-OnBattery/wiki)
 - [OpenDTU-OnBattery releases](https://github.com/hoylabs/OpenDTU-OnBattery/releases)
 
-FluxDTU-specific notes live in this repository's [docs](docs/) directory where
-the upstream documentation does not apply.
+FluxDTU-specific notes live in this repository's [docs](docs/) directory. They
+document fork-specific behavior where the upstream documentation does not apply.
 
 ## Building
 

@@ -9,6 +9,7 @@
 #include <LittleFS.h>
 #include <esp_log.h>
 #include <nvs_flash.h>
+#include <algorithm>
 
 #undef TAG
 static const char* TAG = "configuration";
@@ -90,6 +91,7 @@ static void serializeFlexibleLoadConfig(PowerLimiterFlexibleLoadConfig const& so
     target["name"] = source.Name;
     target["enabled"] = source.Enabled;
     target["priority"] = source.Priority;
+    target["energy_mode"] = source.Mode;
     target["mqtt_topic"] = source.MqttTopic;
     target["mqtt_on_payload"] = source.MqttOnPayload;
     target["mqtt_off_payload"] = source.MqttOffPayload;
@@ -109,8 +111,12 @@ static void serializeFlexibleLoadConfig(PowerLimiterFlexibleLoadConfig const& so
     target["stop_power_margin"] = source.StopPowerMargin;
     target["stop_delay"] = source.StopDelay;
     target["stop_on_grid_charger_limit"] = source.StopOnGridChargerLimit;
+    target["allow_grid_charger_power_takeover"] = source.AllowGridChargerPowerTakeover;
     target["battery_support_power_threshold"] = source.BatterySupportPowerThreshold;
     target["max_battery_support_energy"] = source.MaxBatterySupportEnergy;
+    target["battery_buffer_enabled"] = source.BatteryBufferEnabled;
+    target["battery_buffer_power_limit"] = source.BatteryBufferPowerLimit;
+    target["battery_buffer_energy_limit"] = source.BatteryBufferEnergyLimit;
 }
 
 static void deserializeFlexibleLoadConfig(
@@ -123,6 +129,16 @@ static void deserializeFlexibleLoadConfig(
             sizeof(target.Name));
     target.Enabled = source["enabled"] | POWERLIMITER_FLEXIBLE_LOAD_ENABLED;
     target.Priority = deserializeFlexibleLoadPriority(source, index);
+    auto const legacyGridChargerTakeover = source["allow_grid_charger_power_takeover"]
+        | POWERLIMITER_FLEXIBLE_LOAD_ALLOW_GRID_CHARGER_POWER_TAKEOVER;
+    uint8_t const defaultEnergyMode = legacyGridChargerTakeover
+        ? PowerLimiterFlexibleLoadConfig::SolarAndChargerTakeover
+        : POWERLIMITER_FLEXIBLE_LOAD_ENERGY_MODE;
+    uint8_t energyMode = source["energy_mode"] | defaultEnergyMode;
+    if (energyMode > PowerLimiterFlexibleLoadConfig::HighPriorityStorage) {
+        energyMode = POWERLIMITER_FLEXIBLE_LOAD_ENERGY_MODE;
+    }
+    target.Mode = static_cast<PowerLimiterFlexibleLoadConfig::EnergyMode>(energyMode);
     strlcpy(target.MqttTopic,
             source["mqtt_topic"] | flexibleLoadDefaultTopic(index),
             sizeof(target.MqttTopic));
@@ -154,8 +170,28 @@ static void deserializeFlexibleLoadConfig(
     target.StopPowerMargin = source["stop_power_margin"] | POWERLIMITER_FLEXIBLE_LOAD_STOP_POWER_MARGIN;
     target.StopDelay = source["stop_delay"] | POWERLIMITER_FLEXIBLE_LOAD_STOP_DELAY;
     target.StopOnGridChargerLimit = source["stop_on_grid_charger_limit"] | POWERLIMITER_FLEXIBLE_LOAD_STOP_ON_GRID_CHARGER_LIMIT;
+    target.AllowGridChargerPowerTakeover = source["allow_grid_charger_power_takeover"]
+        | POWERLIMITER_FLEXIBLE_LOAD_ALLOW_GRID_CHARGER_POWER_TAKEOVER;
     target.BatterySupportPowerThreshold = source["battery_support_power_threshold"] | POWERLIMITER_FLEXIBLE_LOAD_BATTERY_SUPPORT_POWER_THRESHOLD;
     target.MaxBatterySupportEnergy = source["max_battery_support_energy"] | POWERLIMITER_FLEXIBLE_LOAD_MAX_BATTERY_SUPPORT_ENERGY;
+    bool const legacyBatteryBufferConfigured = source["battery_support_power_threshold"].is<int>()
+        || source["max_battery_support_energy"].is<int>();
+    target.BatteryBufferEnabled = source["battery_buffer_enabled"]
+        | (legacyBatteryBufferConfigured
+                ? target.MaxBatterySupportEnergy > 0
+                : POWERLIMITER_FLEXIBLE_LOAD_BATTERY_BUFFER_ENABLED);
+    target.BatteryBufferPowerLimit = source["battery_buffer_power_limit"]
+        | (source["battery_support_power_threshold"]
+                | POWERLIMITER_FLEXIBLE_LOAD_BATTERY_BUFFER_POWER_LIMIT);
+    target.BatteryBufferEnergyLimit = source["battery_buffer_energy_limit"]
+        | (source["max_battery_support_energy"]
+                | POWERLIMITER_FLEXIBLE_LOAD_BATTERY_BUFFER_ENERGY_LIMIT);
+
+    target.AllowGridChargerPowerTakeover =
+        target.Mode != PowerLimiterFlexibleLoadConfig::SolarOnly;
+    target.StopOnGridChargerLimit = false;
+    target.BatterySupportPowerThreshold = target.BatteryBufferPowerLimit;
+    target.MaxBatterySupportEnergy = target.BatteryBufferEnergyLimit;
 }
 
 void ConfigurationClass::serializeHttpRequestConfig(HttpRequestConfig const& source, JsonObject& target, bool includeCredentials)
@@ -320,11 +356,27 @@ void ConfigurationClass::serializePowerLimiterConfig(PowerLimiterConfig const& s
     target["target_power_consumption_storage_offset"] = source.TargetPowerConsumptionStorageOffset;
     target["battery_target_power_consumption"] = source.BatteryTargetPowerConsumption;
     target["battery_standby_power_margin"] = source.BatteryStandbyPowerMargin;
+    target["battery_eager_start_enabled"] = source.BatteryEagerStartEnabled;
+    target["battery_eager_start_maximize_inverters"] = source.BatteryEagerStartMaximizeInverters;
+    target["battery_discharge_current_limit_enabled"] = source.BatteryDischargeCurrentLimitEnabled;
+    target["battery_discharge_current_limit"] = roundedFloat(source.BatteryDischargeCurrentLimit);
+    target["battery_discharge_current_peak_limit"] = roundedFloat(source.BatteryDischargeCurrentPeakLimit);
+    target["battery_discharge_current_peak_duration"] = source.BatteryDischargeCurrentPeakDuration;
+    target["battery_discharge_current_recovery_duration"] = source.BatteryDischargeCurrentRecoveryDuration;
     target["battery_target_power_consumption_dynamic_enabled"] = source.BatteryTargetPowerConsumptionDynamicEnabled;
     target["battery_target_power_consumption_dynamic_max"] = source.BatteryTargetPowerConsumptionDynamicMax;
     target["battery_target_power_consumption_dynamic_multiplier"] = source.BatteryTargetPowerConsumptionDynamicMultiplier;
     target["battery_target_power_consumption_dynamic_window"] = source.BatteryTargetPowerConsumptionDynamicWindow;
     target["target_power_consumption_hysteresis"] = source.TargetPowerConsumptionHysteresis;
+    target["small_correction_damping_threshold"] =
+        source.SmallCorrectionDampingThreshold;
+    target["target_power_consumption_corridor_error_threshold_ws"] =
+        source.TargetPowerConsumptionCorridorErrorThresholdWs;
+    target["target_power_consumption_band_error_threshold_ws"] =
+        source.TargetPowerConsumptionBandErrorThresholdWs;
+    target["adaptive_planner_target_change_threshold"] =
+        source.AdaptivePlannerTargetChangeThreshold;
+    target["adaptive_planner_max_interval"] = source.AdaptivePlannerMaxInterval;
     target["base_load_limit"] = source.BaseLoadLimit;
     target["ignore_soc"] = source.IgnoreSoc;
     target["battery_soc_start_threshold"] = source.BatterySocStartThreshold;
@@ -339,6 +391,8 @@ void ConfigurationClass::serializePowerLimiterConfig(PowerLimiterConfig const& s
     target["inverter_channel_id_for_dc_voltage"] = source.InverterChannelIdForDcVoltage;
     target["inverter_restart_hour"] = source.RestartHour;
     target["total_upper_power_limit"] = source.TotalUpperPowerLimit;
+    target["flexible_load_emergency_stop_enabled"] = source.FlexibleLoadEmergencyStopEnabled;
+    target["flexible_load_emergency_stop_grid_power_limit"] = source.FlexibleLoadEmergencyStopGridPowerLimit;
 
     JsonArray flexibleLoads = target["flexible_loads"].to<JsonArray>();
     for (size_t i = 0; i < POWERLIMITER_FLEXIBLE_LOAD_MAX_COUNT; ++i) {
@@ -372,16 +426,22 @@ void ConfigurationClass::serializeGridChargerConfig(GridChargerConfig const& sou
     target["provider"] = source.Provider;
     target["auto_power_enabled"] = source.AutoPowerEnabled;
     target["auto_power_batterysoc_limits_enabled"] = source.AutoPowerBatterySoCLimitsEnabled;
+    target["auto_power_ignore_bms_current"] = source.AutoPowerIgnoreBmsCurrent;
+    target["auto_power_bms_charge_current_margin"] = roundedFloat(source.AutoPowerBmsChargeCurrentMargin);
     target["emergency_charge_enabled"] = source.EmergencyChargeEnabled;
     target["voltage_limit"] = roundedFloat(source.AutoPowerVoltageLimit);
     target["enable_voltage_limit"] = roundedFloat(source.AutoPowerEnableVoltageLimit);
     target["lower_power_limit"] = source.AutoPowerLowerPowerLimit;
     target["upper_power_limit"] = source.AutoPowerUpperPowerLimit;
     target["stop_batterysoc_threshold"] = source.AutoPowerStopBatterySoCThreshold;
+    target["reenable_batterysoc_threshold"] = source.AutoPowerReenableBatterySoCThreshold;
     target["auto_power_soc_planning_enabled"] = source.AutoPowerSocPlanningEnabled;
     target["auto_power_soc_planning_day_min_soc"] = source.AutoPowerSocPlanningDayMinSoC;
+    target["auto_power_soc_planning_intermediate_target_soc"] = source.AutoPowerSocPlanningIntermediateTargetSoC;
     target["auto_power_soc_planning_night_target_soc"] = source.AutoPowerSocPlanningNightTargetSoC;
     target["auto_power_soc_planning_start_after_sunrise"] = source.AutoPowerSocPlanningStartAfterSunrise;
+    target["auto_power_soc_planning_intermediate_before_sunset"] = source.AutoPowerSocPlanningIntermediateBeforeSunset;
+    target["auto_power_soc_planning_final_ramp_start_before_sunset"] = source.AutoPowerSocPlanningFinalRampStartBeforeSunset;
     target["auto_power_soc_planning_finish_before_sunset"] = source.AutoPowerSocPlanningFinishBeforeSunset;
     target["auto_power_soc_planning_battery_capacity"] = source.AutoPowerSocPlanningBatteryCapacity;
     target["auto_power_soc_planning_power_limit_enabled"] = source.AutoPowerSocPlanningPowerLimitEnabled;
@@ -441,6 +501,9 @@ bool ConfigurationClass::write()
     wifi["dhcp"] = config.WiFi.Dhcp;
     wifi["hostname"] = config.WiFi.Hostname;
     wifi["aptimeout"] = config.WiFi.ApTimeout;
+    wifi["preferred_ap_bssid"] = config.WiFi.PreferredApBssid;
+    wifi["preferred_ap_channel"] = config.WiFi.PreferredApChannel;
+    wifi["preferred_ap_rssi"] = config.WiFi.PreferredApRssi;
 
     JsonObject mdns = doc["mdns"].to<JsonObject>();
     mdns["enabled"] = config.Mdns.Enabled;
@@ -534,6 +597,7 @@ bool ConfigurationClass::write()
         inv["zero_day"] = config.Inverter[i].ZeroYieldDayOnMidnight;
         inv["clear_eventlog"] = config.Inverter[i].ClearEventlogOnMidnight;
         inv["yieldday_correction"] = config.Inverter[i].YieldDayCorrection;
+        inv["max_power_override"] = config.Inverter[i].MaxPowerOverride;
 
         JsonArray channel = inv["channel"].to<JsonArray>();
         for (uint8_t c = 0; c < INV_MAX_CHAN_COUNT; c++) {
@@ -779,11 +843,42 @@ void ConfigurationClass::deserializePowerLimiterConfig(JsonObject const& source,
     target.TargetPowerConsumptionStorageOffset = source["target_power_consumption_storage_offset"] | POWERLIMITER_TARGET_POWER_CONSUMPTION_STORAGE_OFFSET;
     target.BatteryTargetPowerConsumption = source["battery_target_power_consumption"] | POWERLIMITER_BATTERY_TARGET_POWER_CONSUMPTION;
     target.BatteryStandbyPowerMargin = source["battery_standby_power_margin"] | POWERLIMITER_BATTERY_STANDBY_POWER_MARGIN;
+    target.BatteryEagerStartEnabled = source["battery_eager_start_enabled"] | POWERLIMITER_BATTERY_EAGER_START_ENABLED;
+    target.BatteryEagerStartMaximizeInverters = source["battery_eager_start_maximize_inverters"] | POWERLIMITER_BATTERY_EAGER_START_MAXIMIZE_INVERTERS;
+    target.BatteryDischargeCurrentLimitEnabled = source["battery_discharge_current_limit_enabled"] | POWERLIMITER_BATTERY_DISCHARGE_CURRENT_LIMIT_ENABLED;
+    target.BatteryDischargeCurrentLimit = source["battery_discharge_current_limit"] | POWERLIMITER_BATTERY_DISCHARGE_CURRENT_LIMIT;
+    target.BatteryDischargeCurrentPeakLimit = source["battery_discharge_current_peak_limit"] | POWERLIMITER_BATTERY_DISCHARGE_CURRENT_PEAK_LIMIT;
+    target.BatteryDischargeCurrentPeakDuration = source["battery_discharge_current_peak_duration"] | POWERLIMITER_BATTERY_DISCHARGE_CURRENT_PEAK_DURATION;
+    target.BatteryDischargeCurrentRecoveryDuration = source["battery_discharge_current_recovery_duration"] | POWERLIMITER_BATTERY_DISCHARGE_CURRENT_RECOVERY_DURATION;
     target.BatteryTargetPowerConsumptionDynamicEnabled = source["battery_target_power_consumption_dynamic_enabled"] | POWERLIMITER_BATTERY_TARGET_POWER_CONSUMPTION_DYNAMIC_ENABLED;
     target.BatteryTargetPowerConsumptionDynamicMax = source["battery_target_power_consumption_dynamic_max"] | POWERLIMITER_BATTERY_TARGET_POWER_CONSUMPTION_DYNAMIC_MAX;
     target.BatteryTargetPowerConsumptionDynamicMultiplier = source["battery_target_power_consumption_dynamic_multiplier"] | POWERLIMITER_BATTERY_TARGET_POWER_CONSUMPTION_DYNAMIC_MULTIPLIER;
     target.BatteryTargetPowerConsumptionDynamicWindow = source["battery_target_power_consumption_dynamic_window"] | POWERLIMITER_BATTERY_TARGET_POWER_CONSUMPTION_DYNAMIC_WINDOW;
     target.TargetPowerConsumptionHysteresis = source["target_power_consumption_hysteresis"] | POWERLIMITER_TARGET_POWER_CONSUMPTION_HYSTERESIS;
+    target.SmallCorrectionDampingThreshold =
+        source["small_correction_damping_threshold"]
+            | POWERLIMITER_SMALL_CORRECTION_DAMPING_THRESHOLD;
+    target.AdaptivePlannerMaxInterval =
+        source["adaptive_planner_max_interval"]
+            | POWERLIMITER_ADAPTIVE_PLANNER_MAX_INTERVAL;
+    auto const legacyCorridorThresholdWs =
+        static_cast<uint32_t>(target.TargetPowerConsumptionHysteresis)
+            * std::max<uint32_t>(1, target.AdaptivePlannerMaxInterval);
+    bool const legacyPlannerTimingConfigured =
+        source["target_power_consumption_hysteresis"].is<int>()
+        || source["adaptive_planner_max_interval"].is<int>();
+    auto const defaultCorridorThresholdWs = legacyPlannerTimingConfigured
+        ? legacyCorridorThresholdWs
+        : POWERLIMITER_TARGET_POWER_CONSUMPTION_CORRIDOR_ERROR_THRESHOLD_WS;
+    target.TargetPowerConsumptionCorridorErrorThresholdWs =
+        source["target_power_consumption_corridor_error_threshold_ws"]
+            | defaultCorridorThresholdWs;
+    target.TargetPowerConsumptionBandErrorThresholdWs =
+        source["target_power_consumption_band_error_threshold_ws"]
+            | POWERLIMITER_TARGET_POWER_CONSUMPTION_BAND_ERROR_THRESHOLD_WS;
+    target.AdaptivePlannerTargetChangeThreshold =
+        source["adaptive_planner_target_change_threshold"]
+            | POWERLIMITER_ADAPTIVE_PLANNER_TARGET_CHANGE_THRESHOLD;
     target.BaseLoadLimit = source["base_load_limit"] | POWERLIMITER_BASE_LOAD_LIMIT;
     target.IgnoreSoc = source["ignore_soc"] | POWERLIMITER_IGNORE_SOC;
     target.BatterySocStartThreshold = source["battery_soc_start_threshold"] | POWERLIMITER_BATTERY_SOC_START_THRESHOLD;
@@ -798,6 +893,8 @@ void ConfigurationClass::deserializePowerLimiterConfig(JsonObject const& source,
     target.InverterChannelIdForDcVoltage = source["inverter_channel_id_for_dc_voltage"] | POWERLIMITER_INVERTER_CHANNEL_ID;
     target.RestartHour = source["inverter_restart_hour"] | POWERLIMITER_RESTART_HOUR;
     target.TotalUpperPowerLimit = source["total_upper_power_limit"] | POWERLIMITER_UPPER_POWER_LIMIT;
+    target.FlexibleLoadEmergencyStopEnabled = source["flexible_load_emergency_stop_enabled"] | POWERLIMITER_FLEXIBLE_LOAD_EMERGENCY_STOP_ENABLED;
+    target.FlexibleLoadEmergencyStopGridPowerLimit = source["flexible_load_emergency_stop_grid_power_limit"] | POWERLIMITER_FLEXIBLE_LOAD_EMERGENCY_STOP_GRID_POWER_LIMIT;
 
     JsonDocument emptyDoc;
     JsonObject empty = emptyDoc.to<JsonObject>();
@@ -841,17 +938,24 @@ void ConfigurationClass::deserializeGridChargerConfig(JsonObject const& source, 
     target.Provider = source["provider"] | GridChargerProviderType::HUAWEI;
     target.AutoPowerEnabled = source["auto_power_enabled"] | false;
     target.AutoPowerBatterySoCLimitsEnabled = source["auto_power_batterysoc_limits_enabled"] | false;
+    target.AutoPowerIgnoreBmsCurrent = source["auto_power_ignore_bms_current"] | GRIDCHARGER_AUTO_POWER_IGNORE_BMS_CURRENT;
+    target.AutoPowerBmsChargeCurrentMargin = source["auto_power_bms_charge_current_margin"]
+        | GRIDCHARGER_AUTO_POWER_BMS_CHARGE_CURRENT_MARGIN;
     target.EmergencyChargeEnabled = source["emergency_charge_enabled"] | false;
     target.AutoPowerVoltageLimit = source["voltage_limit"] | GRIDCHARGER_AUTO_POWER_VOLTAGE_LIMIT;
     target.AutoPowerEnableVoltageLimit =  source["enable_voltage_limit"] | GRIDCHARGER_AUTO_POWER_ENABLE_VOLTAGE_LIMIT;
     target.AutoPowerLowerPowerLimit = source["lower_power_limit"] | GRIDCHARGER_AUTO_POWER_LOWER_POWER_LIMIT;
     target.AutoPowerUpperPowerLimit = source["upper_power_limit"] | GRIDCHARGER_AUTO_POWER_UPPER_POWER_LIMIT;
     target.AutoPowerStopBatterySoCThreshold = source["stop_batterysoc_threshold"] | GRIDCHARGER_AUTO_POWER_STOP_BATTERYSOC_THRESHOLD;
+    target.AutoPowerReenableBatterySoCThreshold = source["reenable_batterysoc_threshold"] | GRIDCHARGER_AUTO_POWER_REENABLE_BATTERYSOC_THRESHOLD;
     target.AutoPowerSocPlanningEnabled = source["auto_power_soc_planning_enabled"] | GRIDCHARGER_AUTO_POWER_SOC_PLANNING_ENABLED;
     target.AutoPowerSocPlanningDayMinSoC = source["auto_power_soc_planning_day_min_soc"] | GRIDCHARGER_AUTO_POWER_SOC_PLANNING_DAY_MIN_SOC;
     target.AutoPowerSocPlanningNightTargetSoC = source["auto_power_soc_planning_night_target_soc"] | GRIDCHARGER_AUTO_POWER_SOC_PLANNING_NIGHT_TARGET_SOC;
     target.AutoPowerSocPlanningStartAfterSunrise = source["auto_power_soc_planning_start_after_sunrise"] | GRIDCHARGER_AUTO_POWER_SOC_PLANNING_START_AFTER_SUNRISE;
     target.AutoPowerSocPlanningFinishBeforeSunset = source["auto_power_soc_planning_finish_before_sunset"] | GRIDCHARGER_AUTO_POWER_SOC_PLANNING_FINISH_BEFORE_SUNSET;
+    target.AutoPowerSocPlanningIntermediateTargetSoC = source["auto_power_soc_planning_intermediate_target_soc"] | target.AutoPowerSocPlanningNightTargetSoC;
+    target.AutoPowerSocPlanningIntermediateBeforeSunset = source["auto_power_soc_planning_intermediate_before_sunset"] | target.AutoPowerSocPlanningFinishBeforeSunset;
+    target.AutoPowerSocPlanningFinalRampStartBeforeSunset = source["auto_power_soc_planning_final_ramp_start_before_sunset"] | target.AutoPowerSocPlanningIntermediateBeforeSunset;
     target.AutoPowerSocPlanningBatteryCapacity = source["auto_power_soc_planning_battery_capacity"] | GRIDCHARGER_AUTO_POWER_SOC_PLANNING_BATTERY_CAPACITY;
     target.AutoPowerSocPlanningPowerLimitEnabled = source["auto_power_soc_planning_power_limit_enabled"] | GRIDCHARGER_AUTO_POWER_SOC_PLANNING_POWER_LIMIT_ENABLED;
     target.AutoPowerSocPlanningMinimumPowerLimit = source["auto_power_soc_planning_minimum_power_limit"] | GRIDCHARGER_AUTO_POWER_SOC_PLANNING_MINIMUM_POWER_LIMIT;
@@ -962,6 +1066,9 @@ bool ConfigurationClass::read()
 
     config.WiFi.Dhcp = wifi["dhcp"] | WIFI_DHCP;
     config.WiFi.ApTimeout = wifi["aptimeout"] | ACCESS_POINT_TIMEOUT;
+    strlcpy(config.WiFi.PreferredApBssid, wifi["preferred_ap_bssid"] | "", sizeof(config.WiFi.PreferredApBssid));
+    config.WiFi.PreferredApChannel = wifi["preferred_ap_channel"] | 0;
+    config.WiFi.PreferredApRssi = wifi["preferred_ap_rssi"] | 0;
 
     JsonObject mdns = doc["mdns"];
     config.Mdns.Enabled = mdns["enabled"] | MDNS_ENABLED;
@@ -1056,6 +1163,10 @@ bool ConfigurationClass::read()
         config.Inverter[i].ZeroYieldDayOnMidnight = inv["zero_day"] | false;
         config.Inverter[i].ClearEventlogOnMidnight = inv["clear_eventlog"] | false;
         config.Inverter[i].YieldDayCorrection = inv["yieldday_correction"] | false;
+        config.Inverter[i].MaxPowerOverride = inv["max_power_override"] | 0;
+        if (config.Inverter[i].MaxPowerOverride > MAX_INVERTER_MAX_POWER_OVERRIDE) {
+            config.Inverter[i].MaxPowerOverride = MAX_INVERTER_MAX_POWER_OVERRIDE;
+        }
 
         JsonArray channel = inv["channel"];
         for (uint8_t c = 0; c < INV_MAX_CHAN_COUNT; c++) {
@@ -1382,12 +1493,15 @@ void ConfigurationClass::migrateOnBattery()
         config.GridCharger.Enabled = huawei["enabled"] | GRIDCHARGER_ENABLED;
         config.GridCharger.AutoPowerEnabled = huawei["auto_power_enabled"] | GRIDCHARGER_AUTO_POWER_ENABLED;
         config.GridCharger.AutoPowerBatterySoCLimitsEnabled = huawei["auto_power_batterysoc_limits_enabled"] | GRIDCHARGER_AUTO_POWER_BATTERYSOC_LIMITS_ENABLED;
+        config.GridCharger.AutoPowerIgnoreBmsCurrent = huawei["auto_power_ignore_bms_current"] | GRIDCHARGER_AUTO_POWER_IGNORE_BMS_CURRENT;
+        config.GridCharger.AutoPowerBmsChargeCurrentMargin = huawei["auto_power_bms_charge_current_margin"] | GRIDCHARGER_AUTO_POWER_BMS_CHARGE_CURRENT_MARGIN;
         config.GridCharger.EmergencyChargeEnabled = huawei["emergency_charge_enabled"] | GRIDCHARGER_EMERGENCY_CHARGE_ENABLED;
         config.GridCharger.AutoPowerVoltageLimit = huawei["voltage_limit"] | GRIDCHARGER_AUTO_POWER_VOLTAGE_LIMIT;
         config.GridCharger.AutoPowerEnableVoltageLimit = huawei["enable_voltage_limit"] | GRIDCHARGER_AUTO_POWER_ENABLE_VOLTAGE_LIMIT;
         config.GridCharger.AutoPowerLowerPowerLimit = huawei["lower_power_limit"] | GRIDCHARGER_AUTO_POWER_LOWER_POWER_LIMIT;
         config.GridCharger.AutoPowerUpperPowerLimit = huawei["upper_power_limit"] | GRIDCHARGER_AUTO_POWER_UPPER_POWER_LIMIT;
         config.GridCharger.AutoPowerStopBatterySoCThreshold = huawei["stop_batterysoc_threshold"] | GRIDCHARGER_AUTO_POWER_STOP_BATTERYSOC_THRESHOLD;
+        config.GridCharger.AutoPowerReenableBatterySoCThreshold = huawei["reenable_batterysoc_threshold"] | GRIDCHARGER_AUTO_POWER_REENABLE_BATTERYSOC_THRESHOLD;
         config.GridCharger.AutoPowerTargetPowerConsumption = huawei["target_power_consumption"] | GRIDCHARGER_AUTO_POWER_TARGET_POWER_CONSUMPTION;
         config.GridCharger.AutoPowerTargetPowerConsumptionDynamicEnabled = huawei["target_power_consumption_dynamic_enabled"] | GRIDCHARGER_AUTO_POWER_TARGET_POWER_CONSUMPTION_DYNAMIC_ENABLED;
         config.GridCharger.AutoPowerTargetPowerConsumptionDynamicMax = huawei["target_power_consumption_dynamic_max"] | GRIDCHARGER_AUTO_POWER_TARGET_POWER_CONSUMPTION_DYNAMIC_MAX;
@@ -1454,7 +1568,9 @@ void ConfigurationClass::deleteInverterById(const uint8_t id)
     config.Inverter[id].ReachableThreshold = REACHABLE_THRESHOLD;
     config.Inverter[id].ZeroRuntimeDataIfUnrechable = false;
     config.Inverter[id].ZeroYieldDayOnMidnight = false;
+    config.Inverter[id].ClearEventlogOnMidnight = false;
     config.Inverter[id].YieldDayCorrection = false;
+    config.Inverter[id].MaxPowerOverride = 0;
 
     for (uint8_t c = 0; c < INV_MAX_CHAN_COUNT; c++) {
         config.Inverter[id].channel[c].MaxChannelPower = 0;

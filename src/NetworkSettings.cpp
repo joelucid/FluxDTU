@@ -11,9 +11,87 @@
 #include "defaults.h"
 #include <ESPmDNS.h>
 #include <ETH.h>
+#include <cstdio>
+#include <cstring>
 
 #undef TAG
 static const char* TAG = "network";
+
+namespace {
+constexpr int32_t PreferredApMinRssi = -80;
+constexpr int32_t MinReselectGain = 8;
+constexpr uint32_t ApSelectionCheckIntervalMillis = 60 * 1000;
+
+struct WifiApCandidate {
+    bool found = false;
+    int32_t rssi = 0;
+    int32_t channel = 0;
+    uint8_t bssid[6] = {};
+    String bssidString;
+};
+
+String formatBssid(const uint8_t* bssid)
+{
+    char result[18];
+    snprintf(result, sizeof(result), "%02X:%02X:%02X:%02X:%02X:%02X",
+        bssid[0], bssid[1], bssid[2], bssid[3], bssid[4], bssid[5]);
+    return result;
+}
+
+bool parseBssid(const char* value, uint8_t* bssid)
+{
+    unsigned int bytes[6];
+    if (!value || sscanf(value, "%2x:%2x:%2x:%2x:%2x:%2x",
+            &bytes[0], &bytes[1], &bytes[2], &bytes[3], &bytes[4], &bytes[5]) != 6) {
+        return false;
+    }
+
+    for (uint8_t i = 0; i < 6; i++) {
+        if (bytes[i] > 0xff) {
+            return false;
+        }
+        bssid[i] = static_cast<uint8_t>(bytes[i]);
+    }
+
+    return true;
+}
+
+bool scanStrongestAp(const char* ssid, WifiApCandidate& best)
+{
+    ESP_LOGI(TAG, "Scanning for strongest WiFi AP using SSID '%s'", ssid);
+    const int16_t apCount = WiFi.scanNetworks(false, true, false, 250);
+    const String currentBssid = WiFi.BSSIDstr();
+
+    for (int16_t i = 0; i < apCount; i++) {
+        const String candidateSsid = WiFi.SSID(static_cast<uint8_t>(i));
+        if (candidateSsid != ssid) {
+            continue;
+        }
+
+        const auto rssi = WiFi.RSSI(static_cast<uint8_t>(i));
+        const auto channel = WiFi.channel(static_cast<uint8_t>(i));
+        const auto* bssid = WiFi.BSSID(static_cast<uint8_t>(i));
+        const String bssidString = formatBssid(bssid);
+
+        ESP_LOGI(TAG, "WiFi candidate: BSSID %s, channel %" PRId32 ", RSSI %" PRId32 " dBm",
+            bssidString.c_str(), channel, rssi);
+
+        if (!best.found || rssi > best.rssi || (rssi == best.rssi && bssidString == currentBssid)) {
+            best.found = true;
+            best.rssi = rssi;
+            best.channel = channel;
+            memcpy(best.bssid, bssid, sizeof(best.bssid));
+            best.bssidString = bssidString;
+        }
+    }
+
+    if (!best.found) {
+        ESP_LOGW(TAG, "No WiFi AP found for SSID '%s' during scan (%" PRId16 ")", ssid, apCount);
+    }
+
+    return best.found;
+}
+} // namespace
 
 NetworkSettingsClass::NetworkSettingsClass()
     : _loopTask(TASK_IMMEDIATE, TASK_FOREVER, std::bind(&NetworkSettingsClass::loop, this))
@@ -105,10 +183,9 @@ void NetworkSettingsClass::NetworkEvent(const WiFiEvent_t event, WiFiEventInfo_t
         // Reason codes can be found here: https://github.com/espressif/esp-idf/blob/5454d37d496a8c58542eb450467471404c606501/components/esp_wifi/include/esp_wifi_types_generic.h#L79-L141
         ESP_LOGW(TAG, "WiFi disconnected: %" PRIu8 "", info.wifi_sta_disconnected.reason);
         if (_networkMode == network_mode::WiFi) {
-            ESP_LOGI(TAG, "Try reconnecting");
+            ESP_LOGI(TAG, "Schedule WiFi reconnect");
             _lastReconnectAttempt = millis();
-            WiFi.disconnect(true, false);
-            WiFi.begin();
+            _connectRequested = true;
             raiseEvent(network_event::NETWORK_DISCONNECTED);
         }
         break;
@@ -249,6 +326,15 @@ void NetworkSettingsClass::loop()
         applyConfig();
     }
 
+    if (_connectRequested && isConnected()) {
+        _connectRequested = false;
+    }
+    if (_connectRequested && _networkMode == network_mode::WiFi && _performConnection && wifiConfigured()) {
+        ESP_LOGI(TAG, "Handling scheduled WiFi reconnect");
+        _connectRequested = false;
+        connectToConfiguredWifi();
+    }
+
     if (millis() - _lastTimerCall > 1000) {
         if (_adminEnabled && _adminTimeoutCounterMax > 0) {
             _adminTimeoutCounter++;
@@ -268,6 +354,7 @@ void NetworkSettingsClass::loop()
             applyConfig();
             _lastReconnectAttempt = millis(); // Just in case if the reconnect method gets not triggered
         }
+        maintainWifiApSelection();
         _connectTimeoutTimer++;
         _connectRedoTimer++;
         _lastTimerCall = millis();
@@ -321,25 +408,150 @@ void NetworkSettingsClass::applyConfig()
         return;
     }
 
-    const bool newCredentials = strcmp(WiFi.SSID().c_str(), config.Ssid) || strcmp(WiFi.psk().c_str(), config.Password);
-
     ESP_LOGI(TAG, "Start configuring WiFi STA using %s credentials",
-        newCredentials ? "new" : "existing");
+        (strcmp(WiFi.SSID().c_str(), config.Ssid) || strcmp(WiFi.psk().c_str(), config.Password)) ? "new" : "existing");
 
-    bool success = false;
-    if (newCredentials) {
-        success = WiFi.begin(
-            config.Ssid,
-            config.Password) != WL_CONNECT_FAILED;
-    } else {
-        success = WiFi.begin() != WL_CONNECT_FAILED;
-    }
+    bool success = connectToConfiguredWifi();
 
     ESP_LOG_LEVEL_LOCAL((success ? ESP_LOG_INFO : ESP_LOG_ERROR), TAG, "Configuring WiFi %s", success ? "done" : "failed");
 
     setStaticIp();
 
     Syslog.updateSettings(getHostname());
+}
+
+bool NetworkSettingsClass::connectToConfiguredWifi()
+{
+    const auto& config = Configuration.get().WiFi;
+
+    if (!wifiConfigured()) {
+        return false;
+    }
+
+    if (connectToPreferredWifiAp()) {
+        return true;
+    }
+
+    WifiApCandidate best;
+    scanStrongestAp(config.Ssid, best);
+
+    bool success = false;
+    if (best.found) {
+        ESP_LOGI(TAG, "Connecting to strongest WiFi AP %s on channel %" PRId32 " (%" PRId32 " dBm)",
+            best.bssidString.c_str(), best.channel, best.rssi);
+        success = WiFi.begin(config.Ssid, config.Password, best.channel, best.bssid) != WL_CONNECT_FAILED;
+        if (success) {
+            rememberPreferredWifiAp(best.bssid, best.bssidString, best.channel, best.rssi);
+        }
+    } else {
+        ESP_LOGW(TAG, "Using default WiFi connect for SSID '%s'", config.Ssid);
+        success = WiFi.begin(config.Ssid, config.Password) != WL_CONNECT_FAILED;
+    }
+    WiFi.scanDelete();
+
+    return success;
+}
+
+bool NetworkSettingsClass::connectToPreferredWifiAp()
+{
+    const auto& config = Configuration.get().WiFi;
+    if (config.PreferredApBssid[0] == '\0' || config.PreferredApChannel == 0) {
+        return false;
+    }
+
+    uint8_t bssid[6];
+    if (!parseBssid(config.PreferredApBssid, bssid)) {
+        ESP_LOGW(TAG, "Configured preferred WiFi AP BSSID '%s' is invalid", config.PreferredApBssid);
+        return false;
+    }
+
+    ESP_LOGI(TAG, "Connecting to preferred WiFi AP %s on channel %" PRIu8 " (last RSSI %" PRId8 " dBm)",
+        config.PreferredApBssid, config.PreferredApChannel, config.PreferredApRssi);
+    return WiFi.begin(config.Ssid, config.Password, config.PreferredApChannel, bssid) != WL_CONNECT_FAILED;
+}
+
+void NetworkSettingsClass::rememberPreferredWifiAp(const uint8_t* bssid, const String& bssidString, const int32_t channel, const int32_t rssi)
+{
+    if (!bssid || channel <= 0 || rssi <= PreferredApMinRssi) {
+        return;
+    }
+
+    bool changed = false;
+    {
+        auto guard = Configuration.getWriteGuard();
+        auto& wifi = guard.getConfig().WiFi;
+
+        if (strcmp(wifi.PreferredApBssid, bssidString.c_str()) == 0 && wifi.PreferredApChannel == channel) {
+            return;
+        }
+
+        strlcpy(wifi.PreferredApBssid, bssidString.c_str(), sizeof(wifi.PreferredApBssid));
+        wifi.PreferredApChannel = static_cast<uint8_t>(channel);
+        wifi.PreferredApRssi = static_cast<int8_t>(rssi);
+        changed = true;
+    }
+
+    if (!changed) {
+        return;
+    }
+
+    if (Configuration.write()) {
+        ESP_LOGI(TAG, "Stored preferred WiFi AP %s on channel %" PRId32 " (%" PRId32 " dBm)",
+            bssidString.c_str(), channel, rssi);
+    } else {
+        ESP_LOGE(TAG, "Failed to store preferred WiFi AP %s", bssidString.c_str());
+    }
+}
+
+void NetworkSettingsClass::rememberCurrentWifiApIfUseful()
+{
+    const int32_t currentRssi = WiFi.RSSI();
+    if (currentRssi <= PreferredApMinRssi) {
+        return;
+    }
+
+    const auto* bssid = WiFi.BSSID();
+    if (!bssid) {
+        return;
+    }
+
+    rememberPreferredWifiAp(bssid, formatBssid(bssid), WiFi.channel(), currentRssi);
+}
+
+void NetworkSettingsClass::maintainWifiApSelection()
+{
+
+    if (_networkMode != network_mode::WiFi || !_performConnection || !isConnected() || !wifiConfigured()) {
+        return;
+    }
+
+    if (millis() - _lastApSelectionCheck < ApSelectionCheckIntervalMillis) {
+        return;
+    }
+    _lastApSelectionCheck = millis();
+
+    const int32_t currentRssi = WiFi.RSSI();
+    if (currentRssi > PreferredApMinRssi) {
+        rememberCurrentWifiApIfUseful();
+        return;
+    }
+
+    const auto& config = Configuration.get().WiFi;
+    const String currentBssid = WiFi.BSSIDstr();
+    WifiApCandidate best;
+    if (!scanStrongestAp(config.Ssid, best)) {
+        WiFi.scanDelete();
+        return;
+    }
+
+    const bool betterAp = best.bssidString != currentBssid && best.rssi >= currentRssi + MinReselectGain;
+    if (betterAp) {
+        ESP_LOGW(TAG, "Switching WiFi AP from %s (%" PRId32 " dBm) to %s (%" PRId32 " dBm)",
+            currentBssid.c_str(), currentRssi, best.bssidString.c_str(), best.rssi);
+        rememberPreferredWifiAp(best.bssid, best.bssidString, best.channel, best.rssi);
+        WiFi.begin(config.Ssid, config.Password, best.channel, best.bssid);
+    }
+    WiFi.scanDelete();
 }
 
 void NetworkSettingsClass::setHostname()

@@ -60,7 +60,7 @@ const router = createRouter({
             component: AboutView,
         },
         {
-            path: '/statistics',
+            path: '/statistics/:tab?',
             name: 'Statistics',
             component: StatisticsView,
         },

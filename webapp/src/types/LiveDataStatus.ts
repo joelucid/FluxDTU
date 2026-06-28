@@ -72,7 +72,6 @@ export interface SolarCharger {
 export interface GridCharger {
     enabled: boolean;
     Power: ValueObject;
-    targetPowerConsumption?: ValueObject;
     powerLimiterManaged?: boolean;
 }
 
@@ -94,6 +93,7 @@ export interface FlexibleLoad {
     name: string;
     enabled: boolean;
     priority: number;
+    energyMode: number;
     configured: boolean;
     state: string;
     startReason: string;
@@ -101,12 +101,13 @@ export interface FlexibleLoad {
     stopReason: string;
     power?: ValueObject;
     batterySupportEnergy?: ValueObject;
+    batterySupportEnergyLimit?: ValueObject;
     batteryDischargePower?: ValueObject;
 }
 
 export interface PowerLimiter {
     enabled: boolean;
-    batteryTargetPowerConsumption?: ValueObject;
+    storageTargetPowerConsumption?: ValueObject;
     flexibleLoad?: FlexibleLoad;
     flexibleLoads?: FlexibleLoad[];
 }

@@ -16,6 +16,11 @@ std::optional<float> Stats::getInputPower() const
    return _dataPoints.get<DataPointLabel::AcPower>();
 }
 
+std::optional<float> Stats::getOutputPower() const
+{
+   return _dataPoints.get<DataPointLabel::DcPower>();
+}
+
 void Stats::updateFrom(DataPointContainer const& dataPoints) const
 {
     _dataPoints.updateFrom(dataPoints);

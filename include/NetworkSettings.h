@@ -65,6 +65,11 @@ private:
     void setupMode();
     void NetworkEvent(const WiFiEvent_t event, WiFiEventInfo_t info);
     void disableAdminMode();
+    bool connectToConfiguredWifi();
+    bool connectToPreferredWifiAp();
+    void maintainWifiApSelection();
+    void rememberPreferredWifiAp(const uint8_t* bssid, const String& bssidString, const int32_t channel, const int32_t rssi);
+    void rememberCurrentWifiApIfUseful();
     bool wifiConfigured() const;
 
     Task _loopTask;
@@ -73,10 +78,12 @@ private:
 
     bool _adminEnabled = true;
     bool _performConnection = true;
+    bool _connectRequested = false;
     uint32_t _adminTimeoutCounter = 0;
     uint32_t _adminTimeoutCounterMax = 0;
     uint32_t _connectTimeoutTimer = 0;
     uint32_t _connectRedoTimer = 0;
+    uint32_t _lastApSelectionCheck = 0;
     uint32_t _lastReconnectAttempt = 0;
     uint32_t _lastTimerCall = 0;
     IPAddress _apIp;

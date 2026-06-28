@@ -5,10 +5,13 @@
 #include <array>
 #include <mutex>
 #include <memory>
+#include <optional>
 #include <queue>
 #include <string>
 #include <tuple>
+#include <vector>
 #include <cstdint>
+#include <gridcharger/Provider.h>
 #include <gridcharger/huawei/DataPoints.h>
 
 namespace GridChargers::Huawei {
@@ -31,7 +34,15 @@ public:
         FanOnlineFullSpeed = 0x0134,
         FanOfflineFullSpeed = 0x0135
     };
-    void setParameter(Setting setting, float val, bool pollFeedback = false);
+    void setParameter(
+            Setting setting,
+            float val,
+            bool pollFeedback = false,
+            std::optional<uint16_t> powerLimiterTargetInputPowerWatts = std::nullopt,
+            uint32_t powerLimiterTargetEffectAssumptionMillis =
+                ::GridChargers::PowerLimiterNormalTargetEffectAssumptionMillis);
+    std::vector<::GridChargers::PowerLimiterTargetDispatchEvent>
+        consumePowerLimiterTargetDispatchEvents();
 
     std::unique_ptr<DataPointContainer> getCurrentData();
 
@@ -79,9 +90,13 @@ private:
         uint16_t command;
         uint16_t flags;
         uint32_t value;
+        std::optional<uint16_t> powerLimiterTargetInputPowerWatts = std::nullopt;
+        uint32_t powerLimiterTargetEffectAssumptionMillis =
+            ::GridChargers::PowerLimiterNormalTargetEffectAssumptionMillis;
     };
     using command_t = struct COMMAND;
     std::queue<command_t> _sendQueue;
+    std::vector<::GridChargers::PowerLimiterTargetDispatchEvent> _powerLimiterTargetDispatchEvents;
 
     float _maxCurrentMultiplier = 0; // device-specific, must be fetched first
 
@@ -113,7 +128,12 @@ private:
     std::optional<uint32_t> _lastSettingsUpdateMillis = std::nullopt;
     void sendSettings();
 
-    void enqueueParameter(Setting setting, float val);
+    void enqueueParameter(
+            Setting setting,
+            float val,
+            std::optional<uint16_t> powerLimiterTargetInputPowerWatts = std::nullopt,
+            uint32_t powerLimiterTargetEffectAssumptionMillis =
+                ::GridChargers::PowerLimiterNormalTargetEffectAssumptionMillis);
 };
 
 } // namespace GridChargers::Huawei

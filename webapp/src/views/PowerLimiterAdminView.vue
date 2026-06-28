@@ -180,6 +180,57 @@
                                 v-model="powerLimiterConfigList.target_power_consumption_hysteresis"
                                 postfix="W"
                                 type="number"
+                                min="0"
+                                wide
+                            />
+
+                            <InputElement
+                                :label="$t('powerlimiteradmin.SmallCorrectionDampingThreshold')"
+                                :tooltip="$t('powerlimiteradmin.SmallCorrectionDampingThresholdHint')"
+                                v-model="powerLimiterConfigList.small_correction_damping_threshold"
+                                postfix="W"
+                                type="number"
+                                min="0"
+                                max="65535"
+                                wide
+                            />
+
+                            <InputElement
+                                :label="$t('powerlimiteradmin.TargetPowerConsumptionCorridorErrorThreshold')"
+                                :tooltip="$t('powerlimiteradmin.TargetPowerConsumptionCorridorErrorThresholdHint')"
+                                v-model="powerLimiterConfigList.target_power_consumption_corridor_error_threshold_ws"
+                                postfix="W*s"
+                                type="number"
+                                min="0"
+                                wide
+                            />
+
+                            <InputElement
+                                :label="$t('powerlimiteradmin.TargetPowerConsumptionBandErrorThreshold')"
+                                :tooltip="$t('powerlimiteradmin.TargetPowerConsumptionBandErrorThresholdHint')"
+                                v-model="powerLimiterConfigList.target_power_consumption_band_error_threshold_ws"
+                                postfix="W*s"
+                                type="number"
+                                min="0"
+                                wide
+                            />
+
+                            <InputElement
+                                :label="$t('powerlimiteradmin.AdaptivePlannerTargetChangeThreshold')"
+                                :tooltip="$t('powerlimiteradmin.AdaptivePlannerTargetChangeThresholdHint')"
+                                v-model="powerLimiterConfigList.adaptive_planner_target_change_threshold"
+                                postfix="W"
+                                type="number"
+                                min="0"
+                                wide
+                            />
+
+                            <InputElement
+                                :label="$t('powerlimiteradmin.AdaptivePlannerMaxInterval')"
+                                :tooltip="$t('powerlimiteradmin.AdaptivePlannerMaxIntervalHint')"
+                                v-model="powerLimiterConfigList.adaptive_planner_max_interval"
+                                postfix="s"
+                                type="number"
                                 min="1"
                                 wide
                             />
@@ -230,6 +281,25 @@
                         tabindex="0"
                     >
                         <CardElement :text="$t('powerlimiteradmin.FlexibleLoadSettings')" textVariant="text-bg-primary">
+                            <InputElement
+                                :label="$t('powerlimiteradmin.FlexibleLoadEmergencyStopEnabled')"
+                                :tooltip="$t('powerlimiteradmin.FlexibleLoadEmergencyStopEnabledHint')"
+                                v-model="powerLimiterConfigList.flexible_load_emergency_stop_enabled"
+                                type="checkbox"
+                                wide
+                            />
+
+                            <InputElement
+                                v-if="powerLimiterConfigList.flexible_load_emergency_stop_enabled"
+                                :label="$t('powerlimiteradmin.FlexibleLoadEmergencyStopGridPowerLimit')"
+                                :tooltip="$t('powerlimiteradmin.FlexibleLoadEmergencyStopGridPowerLimitHint')"
+                                v-model="powerLimiterConfigList.flexible_load_emergency_stop_grid_power_limit"
+                                postfix="W"
+                                type="number"
+                                min="0"
+                                wide
+                            />
+
                             <div
                                 v-for="(load, loadIdx) in powerLimiterConfigList.flexible_loads"
                                 :key="loadIdx"
@@ -268,6 +338,27 @@
                                     max="4"
                                     wide
                                 />
+
+                                <div class="row mb-3">
+                                    <label class="col-sm-4 col-form-label">
+                                        {{ $t('powerlimiteradmin.FlexibleLoadEnergyMode') }}
+                                        <BIconInfoCircle
+                                            v-tooltip
+                                            :title="$t('powerlimiteradmin.FlexibleLoadEnergyModeHint')"
+                                        />
+                                    </label>
+                                    <div class="col-sm-8">
+                                        <select class="form-select" v-model="load.energy_mode">
+                                            <option
+                                                v-for="mode in flexibleLoadEnergyModeList"
+                                                :key="mode.key"
+                                                :value="mode.key"
+                                            >
+                                                {{ $t(`powerlimiteradmin.FlexibleLoadEnergyMode` + mode.value) }}
+                                            </option>
+                                        </select>
+                                    </div>
+                                </div>
 
                                 <h6 class="border-bottom pb-2 mb-3">
                                     {{ $t('powerlimiteradmin.FlexibleLoadSectionMeasurement') }}
@@ -365,25 +456,6 @@
                                     />
 
                                     <InputElement
-                                        :label="$t('powerlimiteradmin.FlexibleLoadStartOnBmsChargeCurrentLimit')"
-                                        :tooltip="$t('powerlimiteradmin.FlexibleLoadStartOnBmsChargeCurrentLimitHint')"
-                                        v-model="load.start_on_bms_charge_current_limit"
-                                        type="checkbox"
-                                        wide
-                                    />
-
-                                    <InputElement
-                                        :label="$t('powerlimiteradmin.FlexibleLoadBmsChargeCurrentLimitMargin')"
-                                        :tooltip="$t('powerlimiteradmin.FlexibleLoadBmsChargeCurrentLimitMarginHint')"
-                                        v-model="load.bms_charge_current_limit_margin"
-                                        postfix="A"
-                                        type="number"
-                                        min="0"
-                                        step="0.1"
-                                        wide
-                                    />
-
-                                    <InputElement
                                         :label="$t('powerlimiteradmin.FlexibleLoadStartPowerDemand')"
                                         :tooltip="$t('powerlimiteradmin.FlexibleLoadStartPowerDemandHint')"
                                         v-model="load.start_power_demand"
@@ -445,14 +517,6 @@
                                     />
 
                                     <InputElement
-                                        :label="$t('powerlimiteradmin.FlexibleLoadStopOnGridChargerLimit')"
-                                        :tooltip="$t('powerlimiteradmin.FlexibleLoadStopOnGridChargerLimitHint')"
-                                        v-model="load.stop_on_grid_charger_limit"
-                                        type="checkbox"
-                                        wide
-                                    />
-
-                                    <InputElement
                                         :label="$t('powerlimiteradmin.FlexibleLoadStopDelay')"
                                         v-model="load.stop_delay"
                                         postfix="s"
@@ -462,9 +526,18 @@
                                     />
 
                                     <InputElement
-                                        :label="$t('powerlimiteradmin.FlexibleLoadBatterySupportPowerThreshold')"
-                                        :tooltip="$t('powerlimiteradmin.FlexibleLoadBatterySupportPowerThresholdHint')"
-                                        v-model="load.battery_support_power_threshold"
+                                        :label="$t('powerlimiteradmin.FlexibleLoadBatteryBufferEnabled')"
+                                        :tooltip="$t('powerlimiteradmin.FlexibleLoadBatteryBufferEnabledHint')"
+                                        v-model="load.battery_buffer_enabled"
+                                        type="checkbox"
+                                        wide
+                                    />
+
+                                    <InputElement
+                                        v-if="load.battery_buffer_enabled"
+                                        :label="$t('powerlimiteradmin.FlexibleLoadBatteryBufferPowerLimit')"
+                                        :tooltip="$t('powerlimiteradmin.FlexibleLoadBatteryBufferPowerLimitHint')"
+                                        v-model="load.battery_buffer_power_limit"
                                         postfix="W"
                                         type="number"
                                         min="0"
@@ -472,9 +545,10 @@
                                     />
 
                                     <InputElement
-                                        :label="$t('powerlimiteradmin.FlexibleLoadMaxBatterySupportEnergy')"
-                                        :tooltip="$t('powerlimiteradmin.FlexibleLoadMaxBatterySupportEnergyHint')"
-                                        v-model="load.max_battery_support_energy"
+                                        v-if="load.battery_buffer_enabled"
+                                        :label="$t('powerlimiteradmin.FlexibleLoadBatteryBufferEnergyLimit')"
+                                        :tooltip="$t('powerlimiteradmin.FlexibleLoadBatteryBufferEnergyLimitHint')"
+                                        v-model="load.battery_buffer_energy_limit"
                                         postfix="Wh"
                                         type="number"
                                         min="0"
@@ -626,6 +700,79 @@
 
                             <InputElement
                                 v-if="hasPowerMeter"
+                                :label="$t('powerlimiteradmin.BatteryEagerStartEnabled')"
+                                :tooltip="$t('powerlimiteradmin.BatteryEagerStartEnabledHint')"
+                                v-model="powerLimiterConfigList.battery_eager_start_enabled"
+                                type="checkbox"
+                                wide
+                            />
+
+                            <InputElement
+                                v-if="hasPowerMeter"
+                                :label="$t('powerlimiteradmin.BatteryEagerStartMaximizeInverters')"
+                                :tooltip="$t('powerlimiteradmin.BatteryEagerStartMaximizeInvertersHint')"
+                                v-model="powerLimiterConfigList.battery_eager_start_maximize_inverters"
+                                :disabled="!powerLimiterConfigList.battery_eager_start_enabled"
+                                type="checkbox"
+                                wide
+                            />
+
+                            <InputElement
+                                :label="$t('powerlimiteradmin.BatteryDischargeCurrentLimitEnabled')"
+                                :tooltip="$t('powerlimiteradmin.BatteryDischargeCurrentLimitEnabledHint')"
+                                v-model="powerLimiterConfigList.battery_discharge_current_limit_enabled"
+                                type="checkbox"
+                                wide
+                            />
+
+                            <template v-if="powerLimiterConfigList.battery_discharge_current_limit_enabled">
+                                <InputElement
+                                    :label="$t('powerlimiteradmin.BatteryDischargeCurrentLimit')"
+                                    :tooltip="$t('powerlimiteradmin.BatteryDischargeCurrentLimitHint')"
+                                    v-model="powerLimiterConfigList.battery_discharge_current_limit"
+                                    postfix="A"
+                                    type="number"
+                                    min="0"
+                                    step="0.1"
+                                    wide
+                                />
+
+                                <InputElement
+                                    :label="$t('powerlimiteradmin.BatteryDischargeCurrentPeakLimit')"
+                                    :tooltip="$t('powerlimiteradmin.BatteryDischargeCurrentPeakLimitHint')"
+                                    v-model="powerLimiterConfigList.battery_discharge_current_peak_limit"
+                                    postfix="A"
+                                    type="number"
+                                    min="0"
+                                    step="0.1"
+                                    wide
+                                />
+
+                                <InputElement
+                                    :label="$t('powerlimiteradmin.BatteryDischargeCurrentPeakDuration')"
+                                    :tooltip="$t('powerlimiteradmin.BatteryDischargeCurrentPeakDurationHint')"
+                                    v-model="powerLimiterConfigList.battery_discharge_current_peak_duration"
+                                    postfix="s"
+                                    type="number"
+                                    min="0"
+                                    max="3600"
+                                    wide
+                                />
+
+                                <InputElement
+                                    :label="$t('powerlimiteradmin.BatteryDischargeCurrentRecoveryDuration')"
+                                    :tooltip="$t('powerlimiteradmin.BatteryDischargeCurrentRecoveryDurationHint')"
+                                    v-model="powerLimiterConfigList.battery_discharge_current_recovery_duration"
+                                    postfix="s"
+                                    type="number"
+                                    min="0"
+                                    max="86400"
+                                    wide
+                                />
+                            </template>
+
+                            <InputElement
+                                v-if="hasPowerMeter"
                                 :label="$t('powerlimiteradmin.BatteryTargetPowerConsumptionDynamicEnabled')"
                                 :tooltip="$t('powerlimiteradmin.BatteryTargetPowerConsumptionDynamicEnabledHint')"
                                 v-model="powerLimiterConfigList.battery_target_power_consumption_dynamic_enabled"
@@ -669,7 +816,7 @@
                                     v-model="powerLimiterConfigList.battery_target_power_consumption_dynamic_window"
                                     postfix="s"
                                     type="number"
-                                    min="10"
+                                    min="1"
                                     wide
                                 />
                             </template>
@@ -926,6 +1073,11 @@ export default defineComponent({
                 { key: 0, value: 'W' },
                 { key: 2, value: 'kW' },
             ],
+            flexibleLoadEnergyModeList: [
+                { key: 0, value: 'SolarOnly' },
+                { key: 1, value: 'SolarAndChargerTakeover' },
+                { key: 2, value: 'HighPriorityStorage' },
+            ],
         };
     },
     created() {
@@ -1181,6 +1333,18 @@ export default defineComponent({
                 .then((response) => handleResponse(response, this.$emitter, this.$router))
                 .then((data) => {
                     data.inverters = this.tidyUpInverterConfigs(data.inverters);
+                    data.flexible_load_emergency_stop_enabled = data.flexible_load_emergency_stop_enabled ?? true;
+                    data.flexible_load_emergency_stop_grid_power_limit =
+                        data.flexible_load_emergency_stop_grid_power_limit ?? 3000;
+                    data.battery_discharge_current_limit_enabled =
+                        data.battery_discharge_current_limit_enabled ?? false;
+                    data.battery_eager_start_enabled = data.battery_eager_start_enabled ?? false;
+                    data.battery_eager_start_maximize_inverters = data.battery_eager_start_maximize_inverters ?? false;
+                    data.battery_discharge_current_limit = data.battery_discharge_current_limit ?? 26;
+                    data.battery_discharge_current_peak_limit = data.battery_discharge_current_peak_limit ?? 42;
+                    data.battery_discharge_current_peak_duration = data.battery_discharge_current_peak_duration ?? 30;
+                    data.battery_discharge_current_recovery_duration =
+                        data.battery_discharge_current_recovery_duration ?? 300;
                     data.flexible_loads = this.tidyUpFlexibleLoadConfigs(data.flexible_loads || data.flexible_load);
                     data.flexible_load = data.flexible_loads[0];
                     this.powerLimiterConfigList = data;
@@ -1206,7 +1370,7 @@ export default defineComponent({
             return defaults.map((defaultsForLoad, index) =>
                 this.tidyUpFlexibleLoadConfig({
                     ...defaultsForLoad,
-                    ...(existing[index] || {}),
+                    ...existing[index],
                 } as PowerLimiterFlexibleLoadConfig)
             );
         },
@@ -1215,6 +1379,7 @@ export default defineComponent({
                 name: 'Flexible Load',
                 enabled: false,
                 priority: 1,
+                energy_mode: config?.energy_mode ?? (config?.allow_grid_charger_power_takeover ? 1 : 0),
                 mqtt_topic: '',
                 mqtt_on_payload: 'ON',
                 mqtt_off_payload: 'OFF',
@@ -1233,10 +1398,18 @@ export default defineComponent({
                 min_offtime: 300,
                 stop_power_margin: 50,
                 stop_on_grid_charger_limit: false,
+                allow_grid_charger_power_takeover: false,
                 stop_delay: 60,
                 battery_support_power_threshold: 50,
                 max_battery_support_energy: 25,
-                ...(config || {}),
+                battery_buffer_enabled:
+                    config?.battery_buffer_enabled ??
+                    (typeof config?.max_battery_support_energy === 'number' && config.max_battery_support_energy > 0),
+                battery_buffer_power_limit:
+                    config?.battery_buffer_power_limit ?? config?.battery_support_power_threshold ?? 50,
+                battery_buffer_energy_limit:
+                    config?.battery_buffer_energy_limit ?? config?.max_battery_support_energy ?? 25,
+                ...config,
             };
         },
         tidyUpInverterConfigs(inverters: PowerLimiterInverterConfig[]): PowerLimiterInverterConfig[] {

@@ -75,7 +75,7 @@ void MqttHandleInverterClass::loop()
             // Limit
             MqttSettings.publish(subtopic + "/status/limit_relative", String(inv->SystemConfigPara()->getLimitPercent()));
 
-            uint16_t maxpower = inv->DevInfo()->getMaxPower();
+            uint16_t maxpower = inv->getMaxPower();
             if (maxpower > 0) {
                 MqttSettings.publish(subtopic + "/status/limit_absolute", String(inv->SystemConfigPara()->getLimitPercent() * maxpower / 100));
             }

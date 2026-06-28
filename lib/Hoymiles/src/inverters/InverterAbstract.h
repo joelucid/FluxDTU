@@ -78,6 +78,11 @@ public:
     void setClearEventlogOnMidnight(const bool enabled);
     bool getClearEventlogOnMidnight() const;
 
+    void setMaxPowerOverride(const uint16_t watts);
+    uint16_t getMaxPowerOverride() const;
+    uint16_t getDetectedMaxPower() const;
+    uint16_t getMaxPower() const;
+
     int8_t getLastRssi() const;
 
     void clearRxFragmentBuffer();
@@ -115,6 +120,7 @@ public:
     virtual bool sendActivePowerControlRequest(float limit, const PowerLimitControlType type) = 0;
     virtual bool resendActivePowerControlRequest() = 0;
     virtual bool sendPowerControlRequest(const bool turnOn) = 0;
+    virtual bool sendPowerControlRequestCompleteOnTx(const bool turnOn) = 0;
     virtual bool sendRestartControlRequest() = 0;
     virtual bool resendPowerControlRequest() = 0;
     virtual bool sendChangeChannelRequest();
@@ -122,6 +128,8 @@ public:
 
     // This feature will limit the AC output instead of limiting the DC inputs.
     virtual bool supportsPowerDistributionLogic() = 0;
+
+    void suppressNextRequestHistory();
 
     HoymilesRadio* getRadio();
 
@@ -137,6 +145,8 @@ public:
     std::vector<ChannelNum_t> getChannelsDCByMppt(const MpptNum_t mppt) const;
 
 protected:
+    bool consumeSuppressNextRequestHistory();
+
     HoymilesRadio* _radio;
 
 private:
@@ -156,6 +166,8 @@ private:
     bool _zeroValuesIfUnreachable = false;
     bool _zeroYieldDayOnMidnight = false;
     bool _clearEventlogOnMidnight = false;
+    bool _suppressNextRequestHistory = false;
+    uint16_t _maxPowerOverride = 0;
 
     int8_t _lastRssi = -127;
 

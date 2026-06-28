@@ -101,17 +101,30 @@ void MqttHandlePowerLimiterClass::loop()
 
     MqttSettings.publish("powerlimiter/status/battery_target_power_consumption", String(config.PowerLimiter.BatteryTargetPowerConsumption));
     MqttSettings.publish("powerlimiter/status/battery_standby_power_margin", String(config.PowerLimiter.BatteryStandbyPowerMargin));
+    MqttSettings.publish("powerlimiter/status/battery_eager_start_enabled", String(config.PowerLimiter.BatteryEagerStartEnabled));
+    MqttSettings.publish("powerlimiter/status/battery_eager_start_maximize_inverters", String(config.PowerLimiter.BatteryEagerStartMaximizeInverters));
+    MqttSettings.publish("powerlimiter/status/battery_discharge_current_limit_enabled", String(config.PowerLimiter.BatteryDischargeCurrentLimitEnabled));
+    MqttSettings.publish("powerlimiter/status/battery_discharge_current_limit", String(config.PowerLimiter.BatteryDischargeCurrentLimit));
+    MqttSettings.publish("powerlimiter/status/battery_discharge_current_peak_limit", String(config.PowerLimiter.BatteryDischargeCurrentPeakLimit));
+    MqttSettings.publish("powerlimiter/status/battery_discharge_current_peak_duration", String(config.PowerLimiter.BatteryDischargeCurrentPeakDuration));
+    MqttSettings.publish("powerlimiter/status/battery_discharge_current_recovery_duration", String(config.PowerLimiter.BatteryDischargeCurrentRecoveryDuration));
     MqttSettings.publish("powerlimiter/status/battery_target_power_consumption_dynamic_enabled", String(config.PowerLimiter.BatteryTargetPowerConsumptionDynamicEnabled));
     MqttSettings.publish("powerlimiter/status/battery_target_power_consumption_dynamic_max", String(config.PowerLimiter.BatteryTargetPowerConsumptionDynamicMax));
     MqttSettings.publish("powerlimiter/status/battery_target_power_consumption_dynamic_multiplier", String(config.PowerLimiter.BatteryTargetPowerConsumptionDynamicMultiplier));
     MqttSettings.publish("powerlimiter/status/battery_target_power_consumption_dynamic_window", String(config.PowerLimiter.BatteryTargetPowerConsumptionDynamicWindow));
 
     MqttSettings.publish("powerlimiter/status/inverter_update_timeouts", String(PowerLimiter.getInverterUpdateTimeouts()));
+    MqttSettings.publish("powerlimiter/status/flexible_load_emergency_stop_enabled", String(config.PowerLimiter.FlexibleLoadEmergencyStopEnabled));
+    MqttSettings.publish("powerlimiter/status/flexible_load_emergency_stop_grid_power_limit", String(config.PowerLimiter.FlexibleLoadEmergencyStopGridPowerLimit));
 
     auto publishFlexibleLoadStatus = [](String const& baseTopic, PowerLimiterFlexibleLoadConfig const& flexibleLoadConfig, size_t index) {
         MqttSettings.publish(baseTopic + "/name", flexibleLoadConfig.Name);
         MqttSettings.publish(baseTopic + "/enabled", String(flexibleLoadConfig.Enabled));
         MqttSettings.publish(baseTopic + "/priority", String(flexibleLoadConfig.Priority));
+        MqttSettings.publish(baseTopic + "/energy_mode", String(static_cast<unsigned>(flexibleLoadConfig.Mode)));
+        MqttSettings.publish(baseTopic + "/battery_buffer_enabled", String(flexibleLoadConfig.BatteryBufferEnabled));
+        MqttSettings.publish(baseTopic + "/battery_buffer_power_limit", String(flexibleLoadConfig.BatteryBufferPowerLimit));
+        MqttSettings.publish(baseTopic + "/battery_buffer_energy_limit", String(flexibleLoadConfig.BatteryBufferEnergyLimit));
         MqttSettings.publish(baseTopic + "/configured", String(flexibleLoadConfig.MqttTopic[0] != '\0'));
         MqttSettings.publish(baseTopic + "/state", FlexibleLoad.getStateText(index));
         MqttSettings.publish(baseTopic + "/start_reason", FlexibleLoad.getStartReasonText(index));
@@ -255,7 +268,7 @@ void MqttHandlePowerLimiterClass::onMqttCmd(MqttPowerLimiterCommand command, con
         }
         case MqttPowerLimiterCommand::BatteryTargetPowerConsumption:
             if (config.PowerLimiter.BatteryTargetPowerConsumption == intValue) { return; }
-            DTU_LOGI("Setting battery target power consumption to: %d W", intValue);
+            DTU_LOGI("Setting storage target power consumption to: %d W", intValue);
             config.PowerLimiter.BatteryTargetPowerConsumption = intValue;
             break;
         case MqttPowerLimiterCommand::BatteryStandbyPowerMargin:
@@ -266,27 +279,37 @@ void MqttHandlePowerLimiterClass::onMqttCmd(MqttPowerLimiterCommand command, con
             config.PowerLimiter.BatteryStandbyPowerMargin = margin;
             break;
         }
+        case MqttPowerLimiterCommand::BatteryEagerStartEnabled:
+            if (config.PowerLimiter.BatteryEagerStartEnabled == static_cast<bool>(intValue)) { return; }
+            DTU_LOGI("Setting battery eager start to: %s", intValue ? "enabled" : "disabled");
+            config.PowerLimiter.BatteryEagerStartEnabled = intValue != 0;
+            break;
+        case MqttPowerLimiterCommand::BatteryEagerStartMaximizeInverters:
+            if (config.PowerLimiter.BatteryEagerStartMaximizeInverters == static_cast<bool>(intValue)) { return; }
+            DTU_LOGI("Setting battery eager start maximize inverters to: %s", intValue ? "enabled" : "disabled");
+            config.PowerLimiter.BatteryEagerStartMaximizeInverters = intValue != 0;
+            break;
         case MqttPowerLimiterCommand::BatteryTargetPowerConsumptionDynamicEnabled:
             if (config.PowerLimiter.BatteryTargetPowerConsumptionDynamicEnabled == static_cast<bool>(intValue)) { return; }
-            DTU_LOGI("Setting dynamic battery target power consumption to: %s", intValue ? "enabled" : "disabled");
+            DTU_LOGI("Setting dynamic storage target power consumption to: %s", intValue ? "enabled" : "disabled");
             config.PowerLimiter.BatteryTargetPowerConsumptionDynamicEnabled = intValue != 0;
             break;
         case MqttPowerLimiterCommand::BatteryTargetPowerConsumptionDynamicMax:
         {
             auto const maxValue = std::clamp(intValue, 0, static_cast<int>(std::numeric_limits<int16_t>::max()));
             if (config.PowerLimiter.BatteryTargetPowerConsumptionDynamicMax == maxValue) { return; }
-            DTU_LOGI("Setting dynamic battery target power consumption max to: %d W", maxValue);
+            DTU_LOGI("Setting dynamic storage target power consumption max to: %d W", maxValue);
             config.PowerLimiter.BatteryTargetPowerConsumptionDynamicMax = maxValue;
             break;
         }
         case MqttPowerLimiterCommand::BatteryTargetPowerConsumptionDynamicMultiplier:
             if (config.PowerLimiter.BatteryTargetPowerConsumptionDynamicMultiplier == std::max(0.0f, payload_val)) { return; }
-            DTU_LOGI("Setting dynamic battery target power consumption multiplier to: %.2f", std::max(0.0f, payload_val));
+            DTU_LOGI("Setting dynamic storage target power consumption multiplier to: %.2f", std::max(0.0f, payload_val));
             config.PowerLimiter.BatteryTargetPowerConsumptionDynamicMultiplier = std::max(0.0f, payload_val);
             break;
         case MqttPowerLimiterCommand::BatteryTargetPowerConsumptionDynamicWindow:
             if (config.PowerLimiter.BatteryTargetPowerConsumptionDynamicWindow == std::max(0, intValue)) { return; }
-            DTU_LOGI("Setting dynamic battery target power consumption window to: %d s", std::max(0, intValue));
+            DTU_LOGI("Setting dynamic storage target power consumption window to: %d s", std::max(0, intValue));
             config.PowerLimiter.BatteryTargetPowerConsumptionDynamicWindow = std::max(0, intValue);
             break;
     }

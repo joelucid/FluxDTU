@@ -8,6 +8,8 @@ export interface PowerLimiterInverterInfo {
     command_enable: boolean;
     command_enable_night: boolean;
     max_power: number;
+    detected_max_power: number;
+    max_power_override: number;
     type: string;
     channels: number;
     pdl_supported: boolean;
@@ -38,6 +40,7 @@ export interface PowerLimiterFlexibleLoadConfig {
     name: string;
     enabled: boolean;
     priority: number;
+    energy_mode: number;
     mqtt_topic: string;
     mqtt_on_payload: string;
     mqtt_off_payload: string;
@@ -58,8 +61,12 @@ export interface PowerLimiterFlexibleLoadConfig {
     stop_power_margin: number;
     stop_delay: number;
     stop_on_grid_charger_limit: boolean;
+    allow_grid_charger_power_takeover: boolean;
     battery_support_power_threshold: number;
     max_battery_support_energy: number;
+    battery_buffer_enabled: boolean;
+    battery_buffer_power_limit: number;
+    battery_buffer_energy_limit: number;
 }
 
 export interface PowerLimiterConfig {
@@ -72,11 +79,23 @@ export interface PowerLimiterConfig {
     target_power_consumption_storage_offset: number;
     battery_target_power_consumption: number;
     battery_standby_power_margin: number;
+    battery_eager_start_enabled: boolean;
+    battery_eager_start_maximize_inverters: boolean;
+    battery_discharge_current_limit_enabled: boolean;
+    battery_discharge_current_limit: number;
+    battery_discharge_current_peak_limit: number;
+    battery_discharge_current_peak_duration: number;
+    battery_discharge_current_recovery_duration: number;
     battery_target_power_consumption_dynamic_enabled: boolean;
     battery_target_power_consumption_dynamic_max: number;
     battery_target_power_consumption_dynamic_multiplier: number;
     battery_target_power_consumption_dynamic_window: number;
     target_power_consumption_hysteresis: number;
+    small_correction_damping_threshold: number;
+    target_power_consumption_corridor_error_threshold_ws: number;
+    target_power_consumption_band_error_threshold_ws: number;
+    adaptive_planner_target_change_threshold: number;
+    adaptive_planner_max_interval: number;
     base_load_limit: number;
     ignore_soc: boolean;
     battery_soc_start_threshold: number;
@@ -92,6 +111,8 @@ export interface PowerLimiterConfig {
     inverter_channel_id_for_dc_voltage: number;
     restart_hour: number;
     total_upper_power_limit: number;
+    flexible_load_emergency_stop_enabled: boolean;
+    flexible_load_emergency_stop_grid_power_limit: number;
     flexible_load?: PowerLimiterFlexibleLoadConfig;
     flexible_loads: PowerLimiterFlexibleLoadConfig[];
     inverters: PowerLimiterInverterConfig[];

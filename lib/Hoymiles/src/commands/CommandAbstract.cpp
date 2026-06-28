@@ -108,6 +108,26 @@ uint8_t CommandAbstract::incrementSendCount()
     return _sendCount++;
 }
 
+void CommandAbstract::setRequestHistorySeq(uint32_t seq)
+{
+    _requestHistorySeq = seq;
+}
+
+uint32_t CommandAbstract::getRequestHistorySeq() const
+{
+    return _requestHistorySeq;
+}
+
+void CommandAbstract::setSuppressRequestHistory(bool suppress)
+{
+    _suppressRequestHistory = suppress;
+}
+
+bool CommandAbstract::suppressRequestHistory() const
+{
+    return _suppressRequestHistory;
+}
+
 CommandAbstract* CommandAbstract::getRequestFrameCommand(const uint8_t frame_no)
 {
     return nullptr;

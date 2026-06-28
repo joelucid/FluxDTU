@@ -487,6 +487,10 @@ void HardwareInterface::loop()
         return processQueue(); // not sending timed requests until we know the board properties
     }
 
+    if (!_sendQueue.empty()) {
+        return processQueue();
+    }
+
     if ((millis() - _lastRequestMillis) >= DataRequestIntervalMillis) {
         // we request the device config regularly as the row and index (slot detection)
         // might change by use of the "power" pin, and we use the device config to
@@ -531,7 +535,15 @@ void HardwareInterface::processQueue()
         uint32_t valueId = (static_cast<uint32_t>(cmd.command) << 16) | cmd.flags;
         logMessage("sending", addr, valueId, cmd.value);
 
+        auto const sentMillis = millis();
         if (sendMessage(addr, data)) {
+            if (cmd.powerLimiterTargetInputPowerWatts) {
+                _powerLimiterTargetDispatchEvents.push_back({
+                    *cmd.powerLimiterTargetInputPowerWatts,
+                    sentMillis,
+                    cmd.powerLimiterTargetEffectAssumptionMillis,
+                });
+            }
             _sendQueue.pop();
             continue;
         }
@@ -546,7 +558,11 @@ void HardwareInterface::processQueue()
     }
 }
 
-void HardwareInterface::enqueueParameter(HardwareInterface::Setting setting, float val)
+void HardwareInterface::enqueueParameter(
+        HardwareInterface::Setting setting,
+        float val,
+        std::optional<uint16_t> powerLimiterTargetInputPowerWatts,
+        uint32_t powerLimiterTargetEffectAssumptionMillis)
 {
     uint16_t flags = 0;
 
@@ -585,23 +601,44 @@ void HardwareInterface::enqueueParameter(HardwareInterface::Setting setting, flo
         .registerAddress = 0x80FE,
         .command = static_cast<uint16_t>(setting),
         .flags = flags,
-        .value = static_cast<uint32_t>(val)
+        .value = static_cast<uint32_t>(val),
+        .powerLimiterTargetInputPowerWatts = powerLimiterTargetInputPowerWatts,
+        .powerLimiterTargetEffectAssumptionMillis = powerLimiterTargetEffectAssumptionMillis
     });
 }
 
-void HardwareInterface::setParameter(HardwareInterface::Setting setting, float val, bool pollFeedback)
+void HardwareInterface::setParameter(
+        HardwareInterface::Setting setting,
+        float val,
+        bool pollFeedback,
+        std::optional<uint16_t> powerLimiterTargetInputPowerWatts,
+        uint32_t powerLimiterTargetEffectAssumptionMillis)
 {
     std::lock_guard<std::mutex> lock(_mutex);
 
     if (_taskHandle == nullptr) { return; }
 
-    enqueueParameter(setting, val);
+    enqueueParameter(
+            setting,
+            val,
+            powerLimiterTargetInputPowerWatts,
+            powerLimiterTargetEffectAssumptionMillis);
 
     if (pollFeedback) { // request early param feedback
         _lastRequestMillis = millis() - DataRequestIntervalMillis;
     }
 
     xTaskNotifyGive(_taskHandle);
+}
+
+std::vector<::GridChargers::PowerLimiterTargetDispatchEvent>
+HardwareInterface::consumePowerLimiterTargetDispatchEvents()
+{
+    std::lock_guard<std::mutex> lock(_mutex);
+
+    auto events = _powerLimiterTargetDispatchEvents;
+    _powerLimiterTargetDispatchEvents.clear();
+    return events;
 }
 
 std::unique_ptr<DataPointContainer> HardwareInterface::getCurrentData()

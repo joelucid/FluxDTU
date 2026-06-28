@@ -31,13 +31,16 @@ public:
     std::shared_ptr<::GridChargers::Stats> getStats() const final { return _stats; }
     bool getAutoPowerStatus() const final { return _autoPowerEnabled; };
     int16_t getAutoPowerTargetPowerConsumption() const final { return getEffectiveAutoPowerTargetPowerConsumption(); }
-    bool isAutoPowerTargetPowerConsumptionZeroHoldActive() const final;
     bool isAutoPowerLimitedByAvailablePower() const final { return _autoPowerLimitedByAvailablePower; }
     bool supportsPowerLimiterControl() const final { return true; }
     std::optional<uint32_t> getPowerLimiterOutputReferenceMillis() const final;
     uint16_t getPowerLimiterCurrentInputPowerWatts() const final;
+    std::optional<uint16_t> getPowerLimiterTargetInputPowerWatts() const final;
     uint16_t getPowerLimiterExpectedInputPowerWatts() const final;
     uint16_t getPowerLimiterMaxInputPowerWatts() const final;
+    std::optional<::GridChargers::PowerLimiterControlProposal>
+        getPowerLimiterControlProposal(uint16_t targetInputPowerWatts) const final;
+    std::vector<::GridChargers::PowerLimiterTargetDispatchEvent> consumePowerLimiterTargetDispatchEvents() final;
     uint16_t applyPowerLimiterInputPowerIncrease(uint16_t increase) final;
     uint16_t applyPowerLimiterInputPowerReduction(uint16_t reduction) final;
     void setPowerLimiterLimitedByAvailablePower(bool limited) final { _autoPowerLimitedByAvailablePower = limited; }
@@ -57,9 +60,17 @@ public:
     static constexpr float MAX_OFFLINE_CURRENT = 84.0f;
     static constexpr float MIN_INPUT_CURRENT_LIMIT = 0.0f;
     static constexpr float MAX_INPUT_CURRENT_LIMIT = 40.0f;
+    static constexpr float MIN_AUTO_POWER_BMS_CHARGE_CURRENT_MARGIN = 0.0f;
+    static constexpr float MAX_AUTO_POWER_BMS_CHARGE_CURRENT_MARGIN = 5.0f;
 
 private:
-    void _setParameter(float val, HardwareInterface::Setting setting, bool pollFeedback = false);
+    void _setParameter(
+            float val,
+            HardwareInterface::Setting setting,
+            bool pollFeedback = false,
+            std::optional<uint16_t> powerLimiterTargetInputPowerWatts = std::nullopt,
+            uint32_t powerLimiterTargetEffectAssumptionMillis =
+                ::GridChargers::PowerLimiterNormalTargetEffectAssumptionMillis);
     void _setProduction(bool enable) const;
 
     void setFan(bool online, bool fullSpeed);
@@ -93,13 +104,11 @@ private:
     float _dynamicAutoPowerTargetVariance = 0.0f;
     bool _dynamicAutoPowerTargetInitialized = false;
     int16_t _autoPowerTargetPowerConsumption = 0;
-    uint32_t _autoPowerTargetPowerConsumptionZeroHoldTillMillis = 0;
     uint32_t _autoPowerLowerLimitHoldTillMillis = 0;
     uint32_t _autoPowerStartupQualificationSinceMillis = 0;
     float _lastRequestedOnlineCurrent = 0.0f;
     bool _autoPowerReachedLowerPowerLimit = false;
 
-    void holdAutoPowerTargetPowerConsumptionAtZero();
     bool isAutoPowerLowerLimitHoldActive() const;
     int16_t getEffectiveAutoPowerTargetPowerConsumption() const;
     void resetDynamicAutoPowerTargetState();
@@ -108,14 +117,22 @@ private:
     float getEfficiency() const;
     std::optional<float> getCurrentInputPowerWatts() const;
     float getPowerLimiterMaxInputPowerWattsFloat() const;
+    bool shouldBlockAutoPowerByBatteryState(
+            bool batterySoCValid,
+            float batterySoC,
+            bool bmsChargeBlocked) const;
     void setPowerLimiterInputPowerWatts(float inputPower);
 
     uint8_t _autoPowerEnabledCounter = 0;
     bool _autoPowerEnabled = false;
     bool _autoPowerLimitedByAvailablePower = false;
+    mutable bool _autoPowerBlockedByBatteryState = false;
     bool _batteryEmergencyCharging = false;
     std::optional<uint16_t> _oPowerLimiterTargetInputPowerWatts = std::nullopt;
     uint32_t _powerLimiterCommandMillis = 0;
+    uint32_t _powerLimiterCommandEffectAssumptionMillis =
+        ::GridChargers::PowerLimiterNormalTargetEffectAssumptionMillis;
+    std::vector<::GridChargers::PowerLimiterTargetDispatchEvent> _powerLimiterTargetDispatchEvents;
 
     enum class Topic : unsigned {
         LimitOnlineVoltage,

@@ -147,7 +147,7 @@ void WebApiFileClass::onFileDeleteAll(AsyncWebServerRequest* request)
     WebApi.sendJsonResponse(request, response, __FUNCTION__, __LINE__);
 
     Utils::removeAllFiles();
-    RestartHelper.triggerRestart();
+    RestartHelper.triggerRestart("file_reset");
 }
 
 void WebApiFileClass::onFileUpload(AsyncWebServerRequest* request, String filename, size_t index, uint8_t* data, size_t len, bool final)
@@ -190,5 +190,5 @@ void WebApiFileClass::onFileUploadFinish(AsyncWebServerRequest* request)
     response->addHeader(asyncsrv::T_Connection, asyncsrv::T_close);
     response->addHeader(asyncsrv::T_CORS_ACAO, "*");
     request->send(response);
-    RestartHelper.triggerRestart();
+    RestartHelper.triggerRestart("file_upload");
 }

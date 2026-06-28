@@ -37,6 +37,8 @@ private:
         TargetPowerConsumptionStorageOffset,
         BatteryTargetPowerConsumption,
         BatteryStandbyPowerMargin,
+        BatteryEagerStartEnabled,
+        BatteryEagerStartMaximizeInverters,
         BatteryTargetPowerConsumptionDynamicEnabled,
         BatteryTargetPowerConsumptionDynamicMax,
         BatteryTargetPowerConsumptionDynamicMultiplier,
@@ -44,7 +46,7 @@ private:
     };
 
     static constexpr frozen::string _cmdtopic = "powerlimiter/cmd/";
-    static constexpr frozen::map<frozen::string, MqttPowerLimiterCommand, 18> _subscriptions = {
+    static constexpr frozen::map<frozen::string, MqttPowerLimiterCommand, 20> _subscriptions = {
         { "threshold/soc/start",                            MqttPowerLimiterCommand::BatterySoCStartThreshold },
         { "threshold/soc/stop",                             MqttPowerLimiterCommand::BatterySoCStopThreshold },
         { "threshold/soc/full_solar_passthrough",           MqttPowerLimiterCommand::FullSolarPassthroughSoC },
@@ -59,6 +61,8 @@ private:
         { "target_power_consumption_storage_offset",         MqttPowerLimiterCommand::TargetPowerConsumptionStorageOffset },
         { "battery_target_power_consumption",               MqttPowerLimiterCommand::BatteryTargetPowerConsumption },
         { "battery_standby_power_margin",                   MqttPowerLimiterCommand::BatteryStandbyPowerMargin },
+        { "battery_eager_start_enabled",                    MqttPowerLimiterCommand::BatteryEagerStartEnabled },
+        { "battery_eager_start_maximize_inverters",         MqttPowerLimiterCommand::BatteryEagerStartMaximizeInverters },
         { "battery_target_power_consumption_dynamic_enabled", MqttPowerLimiterCommand::BatteryTargetPowerConsumptionDynamicEnabled },
         { "battery_target_power_consumption_dynamic_max",    MqttPowerLimiterCommand::BatteryTargetPowerConsumptionDynamicMax },
         { "battery_target_power_consumption_dynamic_multiplier", MqttPowerLimiterCommand::BatteryTargetPowerConsumptionDynamicMultiplier },

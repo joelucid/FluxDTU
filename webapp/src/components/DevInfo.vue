@@ -23,8 +23,16 @@
                 <td v-else v-html="$t('devinfo.UnknownModel')"></td>
             </tr>
             <tr>
-                <td>{{ $t('devinfo.DetectedMaxPower') }}</td>
+                <td>{{ $t('devinfo.EffectiveMaxPower') }}</td>
                 <td>{{ $n(devInfoList.max_power, 'decimal') }} W</td>
+            </tr>
+            <tr>
+                <td>{{ $t('devinfo.DetectedMaxPower') }}</td>
+                <td>{{ $n(devInfoList.detected_max_power, 'decimal') }} W</td>
+            </tr>
+            <tr v-if="devInfoList.max_power_override > 0">
+                <td>{{ $t('devinfo.MaxPowerOverride') }}</td>
+                <td>{{ $n(devInfoList.max_power_override, 'decimal') }} W</td>
             </tr>
             <tr>
                 <td>{{ $t('devinfo.BootloaderVersion') }}</td>

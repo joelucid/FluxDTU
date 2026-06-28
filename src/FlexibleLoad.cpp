@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include "FlexibleLoad.h"
+#include "FlexibleLoadAccounting.h"
 #include "FlexibleLoadStats.h"
 #include "MqttSettings.h"
 #include "PowerLimiter.h"
@@ -21,6 +22,7 @@
 static const char* TAG = "dynamicPowerLimiter";
 static const char* SUBTAG = "FlexibleLoad";
 static const char* STATE_FILENAME = "/flexible_load_state.json";
+static constexpr uint32_t STATE_BATTERY_SUPPORT_PERSIST_INTERVAL_MILLIS = 10 * 1000;
 
 FlexibleLoadClass FlexibleLoad;
 
@@ -100,6 +102,7 @@ char const* FlexibleLoadClass::getStartBlockReasonText(StartBlockReason reason) 
         case StartBlockReason::StartDelay: return "start_delay";
         case StartBlockReason::StartSlotBusy: return "start_slot_busy";
         case StartBlockReason::Cooldown: return "cooldown";
+        case StartBlockReason::EmergencyStop: return "emergency_grid_power";
     }
 
     return "unknown";
@@ -159,6 +162,7 @@ void FlexibleLoadClass::resetRunAccounting(Runtime& runtime)
     runtime.BmsChargeLimitStopCandidateSince = 0;
     runtime.LoadStartedMillis = 0;
     runtime.LastBatteryEnergyUpdate = 0;
+    runtime.LastBatterySupportStatePersist = 0;
     runtime.BatterySupportEnergyWh = 0.0f;
     runtime.StartCandidateReason = StartReason::None;
     runtime.CurrentStartReason = StartReason::None;
@@ -213,10 +217,15 @@ void FlexibleLoadClass::restoreState()
             runtime.StateChangedMillis = now;
             runtime.LoadStartedMillis = now - static_cast<uint32_t>(config.MinRuntime) * 1000;
             runtime.LastBatteryEnergyUpdate = now;
+            auto const batterySupportEnergy = persisted["battery_support_energy_wh"] | 0.0f;
+            runtime.BatterySupportEnergyWh = canUseBatteryBuffer(config) && std::isfinite(batterySupportEnergy)
+                ? std::max(0.0f, batterySupportEnergy)
+                : 0.0f;
             runtime.StopReason = "none";
-            DTU_LOGI("restored flexible load %u '%s' as running",
+            DTU_LOGI("restored flexible load %u '%s' as running with %.1f Wh battery support",
                     static_cast<unsigned>(i),
-                    config.Name);
+                    config.Name,
+                    runtime.BatterySupportEnergyWh);
         } else {
             runtime.CurrentState = State::Off;
             runtime.StateChangedMillis = now;
@@ -243,6 +252,9 @@ bool FlexibleLoadClass::persistState() const
         JsonObject persisted = flexibleLoads.add<JsonObject>();
         persisted["mqtt_topic"] = config.MqttTopic;
         persisted["running"] = isRunning(_runtime[i]);
+        if (isRunning(_runtime[i]) && _runtime[i].BatterySupportEnergyWh > 0.0f) {
+            persisted["battery_support_energy_wh"] = _runtime[i].BatterySupportEnergyWh;
+        }
     }
 
     auto const bytesWritten = serializeJson(doc, f);
@@ -269,10 +281,72 @@ float FlexibleLoadClass::getBatteryDischargePowerWatts() const
     return std::max(0.0f, stats->getVoltage() * -stats->getChargeCurrent());
 }
 
+uint16_t FlexibleLoadClass::getGridChargerTakeoverPowerWatts(PowerLimiterFlexibleLoadConfig const& config) const
+{
+    if (!canTakeOverGridCharger(config)) { return 0; }
+
+    auto const& globalConfig = Configuration.get();
+    if (!globalConfig.GridCharger.Enabled || !globalConfig.GridCharger.AutoPowerEnabled) {
+        return 0;
+    }
+    if (!GridCharger.getAutoPowerStatus()) { return 0; }
+    if (!PowerLimiter.isGridChargerManaged() || !GridCharger.supportsPowerLimiterControl()) {
+        return 0;
+    }
+
+    return GridCharger.getPowerLimiterExpectedInputPowerWatts();
+}
+
+bool FlexibleLoadClass::canTakeOverGridCharger(PowerLimiterFlexibleLoadConfig const& config) const
+{
+    return config.Mode == PowerLimiterFlexibleLoadConfig::SolarAndChargerTakeover
+        || config.Mode == PowerLimiterFlexibleLoadConfig::HighPriorityStorage;
+}
+
+bool FlexibleLoadClass::canUseBatteryForStart(PowerLimiterFlexibleLoadConfig const& config) const
+{
+    return config.Mode == PowerLimiterFlexibleLoadConfig::HighPriorityStorage;
+}
+
+bool FlexibleLoadClass::canUseBatteryBuffer(PowerLimiterFlexibleLoadConfig const& config) const
+{
+    return config.BatteryBufferEnabled
+        && config.BatteryBufferPowerLimit > 0
+        && config.BatteryBufferEnergyLimit > 0;
+}
+
+float FlexibleLoadClass::getStartAvailablePowerWatts(PowerLimiterFlexibleLoadConfig const& config) const
+{
+    auto gridPower = PowerMeter.getPowerTotal()
+        + PowerLimiter.getFlexibleLoadDynamicReserveWatts();
+
+    auto available = std::max(0.0f, -gridPower);
+    available += static_cast<float>(getGridChargerTakeoverPowerWatts(config));
+
+    if (canUseBatteryForStart(config) && hasBatteryReachedStartSoC(config)) {
+        available += static_cast<float>(config.StartPowerDemand);
+    }
+
+    return available;
+}
+
+float FlexibleLoadClass::getStopGridPowerWatts(PowerLimiterFlexibleLoadConfig const& config) const
+{
+    return PowerMeter.getPowerTotal()
+        - static_cast<float>(getGridChargerTakeoverPowerWatts(config));
+}
+
+float FlexibleLoadClass::getStopDeficitPowerWatts(PowerLimiterFlexibleLoadConfig const& config) const
+{
+    auto const stopLimit = PowerLimiter.getFlexibleLoadStopTargetPowerConsumption()
+        + config.StopPowerMargin;
+
+    return std::max(0.0f, getStopGridPowerWatts(config) - stopLimit);
+}
+
 bool FlexibleLoadClass::hasGridPowerReachedStartLimit(PowerLimiterFlexibleLoadConfig const& config) const
 {
-    auto const requiredFeedIn = -static_cast<float>(config.StartPowerDemand);
-    return PowerMeter.getPowerTotal() <= requiredFeedIn;
+    return getStartAvailablePowerWatts(config) >= static_cast<float>(config.StartPowerDemand);
 }
 
 bool FlexibleLoadClass::hasBatteryReachedStartSoC(PowerLimiterFlexibleLoadConfig const& config) const
@@ -334,38 +408,53 @@ FlexibleLoadClass::StartReason FlexibleLoadClass::getStartReason(
         runtime.CurrentStartBlockReason = StartBlockReason::MqttDisconnected;
         return StartReason::None;
     }
+    if (!hasBatteryReachedStartSoC(config)) {
+        runtime.CurrentStartBlockReason = StartBlockReason::StartConditionMissing;
+        return StartReason::None;
+    }
+
     if (!hasGridPowerReachedStartLimit(config)) {
         runtime.CurrentStartBlockReason = StartBlockReason::FeedInBelowStartLimit;
         return StartReason::None;
     }
 
-    if (hasBatteryReachedStartSoC(config)) { return StartReason::BatterySoC; }
-    if (isBmsChargeCurrentLimited(config)) { return StartReason::BmsChargeCurrentLimit; }
-
-    runtime.CurrentStartBlockReason = StartBlockReason::StartConditionMissing;
-    return StartReason::None;
+    return StartReason::BatterySoC;
 }
 
-bool FlexibleLoadClass::shouldStopForGridPower(PowerLimiterFlexibleLoadConfig const& config) const
+bool FlexibleLoadClass::shouldStopForGridPower(size_t index, PowerLimiterFlexibleLoadConfig const& config) const
 {
     if (!PowerMeter.isDataValid()) { return true; }
 
-    auto const stopTarget = std::max<int16_t>(
-            PowerLimiter.getTargetPowerConsumption(),
-            PowerLimiter.getStorageTargetPowerConsumption());
-    auto const stopLimit = static_cast<float>(stopTarget + config.StopPowerMargin);
+    auto const deficit = getStopDeficitPowerWatts(config);
+    if (deficit > 0.0f
+            && (!canUseBatteryBuffer(config)
+                || deficit > static_cast<float>(config.BatteryBufferPowerLimit))) {
+        return true;
+    }
 
-    return PowerMeter.getPowerTotal() > stopLimit;
+    auto const batterySupport = getBatteryDischargeSupportPowerWatts(index, config);
+    if (batterySupport > 0.0f
+            && (!canUseBatteryBuffer(config)
+                || batterySupport > static_cast<float>(config.BatteryBufferPowerLimit))) {
+        return true;
+    }
+
+    return false;
 }
 
 bool FlexibleLoadClass::shouldStopForGridChargerLimit(PowerLimiterFlexibleLoadConfig const& config) const
 {
+    if (canTakeOverGridCharger(config)) { return false; }
+
     auto const& globalConfig = Configuration.get();
-    return config.StopOnGridChargerLimit
-        && globalConfig.GridCharger.Enabled
-        && globalConfig.GridCharger.AutoPowerEnabled
-        && GridCharger.getAutoPowerStatus()
-        && GridCharger.isAutoPowerLimitedByAvailablePower();
+    if (!globalConfig.GridCharger.Enabled || !globalConfig.GridCharger.AutoPowerEnabled) {
+        return false;
+    }
+    if (!PowerLimiter.isGridChargerManaged() || !GridCharger.supportsPowerLimiterControl()) {
+        return false;
+    }
+
+    return GridCharger.isAutoPowerLimitedByAvailablePower();
 }
 
 bool FlexibleLoadClass::handleGridChargerLimitStop(
@@ -395,7 +484,8 @@ bool FlexibleLoadClass::hasBatterySupportBudgetExceeded(
         PowerLimiterFlexibleLoadConfig const& config,
         Runtime const& runtime) const
 {
-    return runtime.BatterySupportEnergyWh > static_cast<float>(config.MaxBatterySupportEnergy);
+    if (!canUseBatteryBuffer(config)) { return false; }
+    return runtime.BatterySupportEnergyWh > static_cast<float>(config.BatteryBufferEnergyLimit);
 }
 
 bool FlexibleLoadClass::handleBmsChargeCurrentLimitStop(
@@ -449,25 +539,48 @@ float FlexibleLoadClass::getMeasuredRunningLoadPowerWatts() const
     return totalPower;
 }
 
-float FlexibleLoadClass::getBatterySupportPowerWatts(size_t index, PowerLimiterFlexibleLoadConfig const& config) const
+bool FlexibleLoadClass::accountsBatteryDischargeForBuffer(PowerLimiterFlexibleLoadConfig const& config) const
 {
-    auto const dischargePower = getBatteryDischargePowerWatts();
-    if (dischargePower <= config.BatterySupportPowerThreshold) { return 0.0f; }
+    return config.Mode == PowerLimiterFlexibleLoadConfig::SolarOnly
+        || config.Mode == PowerLimiterFlexibleLoadConfig::SolarAndChargerTakeover;
+}
 
-    auto const billableDischargePower = dischargePower - config.BatterySupportPowerThreshold;
+float FlexibleLoadClass::allocateSharedPowerToLoad(size_t index, float totalSharedPowerWatts) const
+{
     auto const measuredLoadPower = getMeasuredLoadPowerWatts(index);
     auto const measuredRunningLoadPower = getMeasuredRunningLoadPowerWatts();
 
-    if (!measuredLoadPower) {
-        // Keep the legacy global-discharge accounting only when no active load
-        // has a fresh real-power measurement to allocate against.
-        return measuredRunningLoadPower > 0.0f ? 0.0f : billableDischargePower;
-    }
+    return FlexibleLoadAccounting::allocateSharedPowerToLoad(
+            measuredLoadPower,
+            measuredRunningLoadPower,
+            totalSharedPowerWatts);
+}
 
-    if (*measuredLoadPower <= 0.0f || measuredRunningLoadPower <= 0.0f) { return 0.0f; }
+float FlexibleLoadClass::getGridDeficitSupportPowerWatts(size_t index, PowerLimiterFlexibleLoadConfig const& config) const
+{
+    return allocateSharedPowerToLoad(index, getStopDeficitPowerWatts(config));
+}
 
-    auto const loadShare = *measuredLoadPower / measuredRunningLoadPower;
-    return std::min(*measuredLoadPower, billableDischargePower * loadShare);
+float FlexibleLoadClass::getBatteryDischargeSupportPowerWatts(size_t index, PowerLimiterFlexibleLoadConfig const& config) const
+{
+    if (!accountsBatteryDischargeForBuffer(config)) { return 0.0f; }
+
+    return allocateSharedPowerToLoad(index, getBatteryDischargePowerWatts());
+}
+
+float FlexibleLoadClass::getRequiredBatteryBufferPowerWatts(size_t index, PowerLimiterFlexibleLoadConfig const& config) const
+{
+    return std::max(
+            getGridDeficitSupportPowerWatts(index, config),
+            getBatteryDischargeSupportPowerWatts(index, config));
+}
+
+float FlexibleLoadClass::getBatterySupportPowerWatts(size_t index, PowerLimiterFlexibleLoadConfig const& config) const
+{
+    if (!canUseBatteryBuffer(config)) { return 0.0f; }
+
+    auto const supportPower = getRequiredBatteryBufferPowerWatts(index, config);
+    return std::min(supportPower, static_cast<float>(config.BatteryBufferPowerLimit));
 }
 
 void FlexibleLoadClass::updateBatterySupportEnergy(size_t index, PowerLimiterFlexibleLoadConfig const& config, Runtime& runtime)
@@ -485,6 +598,19 @@ void FlexibleLoadClass::updateBatterySupportEnergy(size_t index, PowerLimiterFle
     if (billablePower <= 0.0f) { return; }
 
     runtime.BatterySupportEnergyWh += billablePower * (static_cast<float>(elapsedMillis) / (60.0f * 60.0f * 1000.0f));
+    persistBatterySupportStateIfDue(runtime, now);
+}
+
+void FlexibleLoadClass::persistBatterySupportStateIfDue(Runtime& runtime, uint32_t now)
+{
+    if (runtime.LastBatterySupportStatePersist != 0
+            && (now - runtime.LastBatterySupportStatePersist) < STATE_BATTERY_SUPPORT_PERSIST_INTERVAL_MILLIS) {
+        return;
+    }
+
+    if (persistState()) {
+        runtime.LastBatterySupportStatePersist = now;
+    }
 }
 
 bool FlexibleLoadClass::publishCommand(char const* payload, PowerLimiterFlexibleLoadConfig const& config, Runtime& runtime)
@@ -607,6 +733,26 @@ bool FlexibleLoadClass::loopLoad(
         return false;
     }
 
+    if (PowerLimiter.isFlexibleLoadEmergencyStopActive()) {
+        runtime.CurrentStartBlockReason = StartBlockReason::EmergencyStop;
+        runtime.StartCandidateSince = 0;
+        runtime.StartCandidateReason = StartReason::None;
+        runtime.StopCandidateSince = 0;
+        runtime.GridChargerLimitStopCandidateSince = 0;
+        runtime.BmsChargeLimitStopCandidateSince = 0;
+
+        if (isRunning(runtime)) {
+            stopLoad(index, config, runtime, "emergency_grid_power");
+            return false;
+        }
+
+        if (runtime.CurrentState == State::WaitingForStart) {
+            setState(index, config, runtime, State::Off);
+        }
+        publishPeriodicCommand(config, runtime, now);
+        return false;
+    }
+
     switch (runtime.CurrentState) {
         case State::Disabled:
         case State::Off:
@@ -696,7 +842,7 @@ bool FlexibleLoadClass::loopLoad(
                 return false;
             }
 
-            if (shouldStopForGridPower(config)) {
+            if (shouldStopForGridPower(index, config)) {
                 if (runtime.StopCandidateSince == 0) {
                     runtime.StopCandidateSince = now;
                     publishPeriodicCommand(config, runtime, now);

@@ -13,6 +13,7 @@ public:
     uint32_t getLastUpdate() const final;
 
     std::optional<float> getInputPower() const final;
+    std::optional<float> getOutputPower() const final;
 
     void getLiveViewData(JsonVariant& root) const final;
 

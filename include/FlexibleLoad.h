@@ -52,6 +52,7 @@ private:
         StartDelay,
         StartSlotBusy,
         Cooldown,
+        EmergencyStop,
     };
 
     struct Runtime {
@@ -64,6 +65,7 @@ private:
         uint32_t LastCommandPublish = 0;
         uint32_t LoadStartedMillis = 0;
         uint32_t LastBatteryEnergyUpdate = 0;
+        uint32_t LastBatterySupportStatePersist = 0;
         float BatterySupportEnergyWh = 0.0f;
         StartReason StartCandidateReason = StartReason::None;
         StartReason CurrentStartReason = StartReason::None;
@@ -76,16 +78,28 @@ private:
             PowerLimiterFlexibleLoadConfig const& config, uint32_t now, bool canStart);
     StartReason getStartReason(PowerLimiterConfig const& powerLimiterConfig,
             PowerLimiterFlexibleLoadConfig const& config, Runtime& runtime);
+    bool canTakeOverGridCharger(PowerLimiterFlexibleLoadConfig const& config) const;
+    bool canUseBatteryForStart(PowerLimiterFlexibleLoadConfig const& config) const;
+    bool canUseBatteryBuffer(PowerLimiterFlexibleLoadConfig const& config) const;
+    uint16_t getGridChargerTakeoverPowerWatts(PowerLimiterFlexibleLoadConfig const& config) const;
+    float getStartAvailablePowerWatts(PowerLimiterFlexibleLoadConfig const& config) const;
+    float getStopGridPowerWatts(PowerLimiterFlexibleLoadConfig const& config) const;
+    float getStopDeficitPowerWatts(PowerLimiterFlexibleLoadConfig const& config) const;
     bool hasGridPowerReachedStartLimit(PowerLimiterFlexibleLoadConfig const& config) const;
     bool hasBatteryReachedStartSoC(PowerLimiterFlexibleLoadConfig const& config) const;
     bool isBmsChargeCurrentLimited(PowerLimiterFlexibleLoadConfig const& config) const;
-    bool shouldStopForGridPower(PowerLimiterFlexibleLoadConfig const& config) const;
+    bool shouldStopForGridPower(size_t index, PowerLimiterFlexibleLoadConfig const& config) const;
     bool shouldStopForGridChargerLimit(PowerLimiterFlexibleLoadConfig const& config) const;
     bool handleGridChargerLimitStop(size_t index, PowerLimiterFlexibleLoadConfig const& config, Runtime& runtime, uint32_t now);
     bool handleBmsChargeCurrentLimitStop(size_t index, PowerLimiterFlexibleLoadConfig const& config, Runtime& runtime, uint32_t now);
     bool hasBatterySupportBudgetExceeded(PowerLimiterFlexibleLoadConfig const& config, Runtime const& runtime) const;
     std::optional<float> getMeasuredLoadPowerWatts(size_t index) const;
     float getMeasuredRunningLoadPowerWatts() const;
+    bool accountsBatteryDischargeForBuffer(PowerLimiterFlexibleLoadConfig const& config) const;
+    float allocateSharedPowerToLoad(size_t index, float totalSharedPowerWatts) const;
+    float getGridDeficitSupportPowerWatts(size_t index, PowerLimiterFlexibleLoadConfig const& config) const;
+    float getBatteryDischargeSupportPowerWatts(size_t index, PowerLimiterFlexibleLoadConfig const& config) const;
+    float getRequiredBatteryBufferPowerWatts(size_t index, PowerLimiterFlexibleLoadConfig const& config) const;
     float getBatterySupportPowerWatts(size_t index, PowerLimiterFlexibleLoadConfig const& config) const;
     void updateBatterySupportEnergy(size_t index, PowerLimiterFlexibleLoadConfig const& config, Runtime& runtime);
     bool publishCommand(char const* payload, PowerLimiterFlexibleLoadConfig const& config, Runtime& runtime);
@@ -95,6 +109,7 @@ private:
     bool stopLoad(size_t index, PowerLimiterFlexibleLoadConfig const& config, Runtime& runtime, char const* reason);
     void restoreState();
     bool persistState() const;
+    void persistBatterySupportStateIfDue(Runtime& runtime, uint32_t now);
     void setState(size_t index, PowerLimiterFlexibleLoadConfig const& config, Runtime& runtime, State state);
     void resetRunAccounting(Runtime& runtime);
     bool isRunning(Runtime const& runtime) const;

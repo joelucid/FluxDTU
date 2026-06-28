@@ -7,4 +7,8 @@ platformio_override.ini
 webapp_dist/
 .DS_Store
 /test/test_overscaling
+/test/test_predictive_control
+/test/test_flexible_load_accounting
+/test/test_huawei_power_telemetry
+/test/test_battery_discharge_current_limit
 /.idea

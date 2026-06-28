@@ -43,7 +43,7 @@ void WebApiMaintenanceClass::onRebootPost(AsyncWebServerRequest* request)
         retMsg["code"] = WebApiError::MaintenanceRebootTriggered;
 
         WebApi.sendJsonResponse(request, response, __FUNCTION__, __LINE__);
-        RestartHelper.triggerRestart();
+        RestartHelper.triggerRestart("maintenance_reboot");
     } else {
         retMsg["message"] = "Reboot cancled!";
         retMsg["code"] = WebApiError::MaintenanceRebootCancled;

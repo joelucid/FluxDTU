@@ -34,6 +34,7 @@ enum WebApiError {
     InverterDeleted,
     InverterOrdered,
     InverterStatsResetted,
+    InverterInvalidMaxPowerOverride,
 
     LimitBase = 5000,
     LimitSerialZero,

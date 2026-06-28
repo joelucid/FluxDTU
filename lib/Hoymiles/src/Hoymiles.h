@@ -16,6 +16,10 @@
 #define HOY_SYSTEM_CONFIG_PARA_POLL_INTERVAL (2 * 60 * 1000) // 2 minutes
 #define HOY_SYSTEM_CONFIG_PARA_POLL_MIN_DURATION (4 * 60 * 1000) // at least 4 minutes between sending limit command and read request. Otherwise eventlog entry
 #define HOY_DEGRADED_INVERTER_RECOVERY_MIN_INTERVAL (5 * 1000) // avoid excessive RF load while recovering lagging inverters
+#define HOY_INVERTER_POLL_QUEUE_HIGH_WATERMARK 3 // avoid startup poll bursts per inverter
+#define HOY_UNREACHABLE_POLL_QUEUE_HIGH_WATERMARK 4 // avoid stacking offline polls into DPL backpressure
+#define HOY_ALARM_LOG_POLL_RETRY_INTERVAL (5 * 60 * 1000) // low-priority after RF failure
+#define HOY_GRID_PROFILE_POLL_RETRY_INTERVAL (30 * 60 * 1000) // static metadata, avoid repeated RF failures
 
 class HoymilesClass {
 public:
@@ -37,6 +41,7 @@ public:
 #ifndef HOYMILES_NRF_ONLY
     HoymilesRadio_CMT* getRadioCmt();
 #endif
+    void getRadioRequestHistory(std::vector<HoymilesRadio::RequestHistoryRecord>& records) const;
 
     uint32_t PollInterval() const;
     void setPollInterval(const uint32_t interval);

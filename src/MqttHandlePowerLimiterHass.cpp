@@ -71,11 +71,11 @@ void MqttHandlePowerLimiterHassClass::publishConfig()
         return;
     }
 
-    publishNumber("Battery Target Power Consumption", "mdi:battery-charging", "config", "battery_target_power_consumption", "battery_target_power_consumption", "W", -32768, 32767, 1);
+    publishNumber("Storage Target Power Consumption", "mdi:battery-charging", "config", "battery_target_power_consumption", "battery_target_power_consumption", "W", -32768, 32767, 1);
     publishNumber("Battery Standby Margin", "mdi:battery-sync", "config", "battery_standby_power_margin", "battery_standby_power_margin", "W", 0, 32767, 1);
-    publishNumber("Dynamic Battery Target Max", "mdi:battery-charging", "config", "battery_target_power_consumption_dynamic_max", "battery_target_power_consumption_dynamic_max", "W", 0, 32767, 1);
-    publishNumber("Dynamic Battery Target Multiplier", "mdi:multiplication", "config", "battery_target_power_consumption_dynamic_multiplier", "battery_target_power_consumption_dynamic_multiplier", "x", 0, 10, 0.1);
-    publishNumber("Dynamic Battery Target Window", "mdi:timer-outline", "config", "battery_target_power_consumption_dynamic_window", "battery_target_power_consumption_dynamic_window", "s", 0, 3600, 1);
+    publishNumber("Dynamic Storage Target Max", "mdi:battery-charging", "config", "battery_target_power_consumption_dynamic_max", "battery_target_power_consumption_dynamic_max", "W", 0, 32767, 1);
+    publishNumber("Dynamic Storage Target Multiplier", "mdi:multiplication", "config", "battery_target_power_consumption_dynamic_multiplier", "battery_target_power_consumption_dynamic_multiplier", "x", 0, 10, 0.1);
+    publishNumber("Dynamic Storage Target Window", "mdi:timer-outline", "config", "battery_target_power_consumption_dynamic_window", "battery_target_power_consumption_dynamic_window", "s", 0, 3600, 1);
 
     // as this project revolves around Hoymiles inverters, 16 - 60 V is a reasonable voltage range
     publishNumber("DPL battery voltage start threshold", "mdi:battery-charging",

@@ -14,5 +14,6 @@ public:
     uint16_t standby() final;
 
 private:
+    void setAcOutputAndLimit(uint16_t expectedOutputWatts, uint16_t targetLimitWatts);
     void setAcOutput(uint16_t expectedOutputWatts) final;
 };

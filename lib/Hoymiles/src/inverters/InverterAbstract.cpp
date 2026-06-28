@@ -140,6 +140,30 @@ bool InverterAbstract::getClearEventlogOnMidnight() const
     return _clearEventlogOnMidnight;
 }
 
+void InverterAbstract::setMaxPowerOverride(const uint16_t watts)
+{
+    _maxPowerOverride = watts;
+}
+
+uint16_t InverterAbstract::getMaxPowerOverride() const
+{
+    return _maxPowerOverride;
+}
+
+uint16_t InverterAbstract::getDetectedMaxPower() const
+{
+    return _devInfoParser->getMaxPower();
+}
+
+uint16_t InverterAbstract::getMaxPower() const
+{
+    if (_maxPowerOverride > 0) {
+        return _maxPowerOverride;
+    }
+
+    return getDetectedMaxPower();
+}
+
 int8_t InverterAbstract::getLastRssi() const
 {
     return _lastRssi;
@@ -148,6 +172,18 @@ int8_t InverterAbstract::getLastRssi() const
 bool InverterAbstract::sendChangeChannelRequest()
 {
     return false;
+}
+
+void InverterAbstract::suppressNextRequestHistory()
+{
+    _suppressNextRequestHistory = true;
+}
+
+bool InverterAbstract::consumeSuppressNextRequestHistory()
+{
+    auto const suppress = _suppressNextRequestHistory;
+    _suppressNextRequestHistory = false;
+    return suppress;
 }
 
 HoymilesRadio* InverterAbstract::getRadio()

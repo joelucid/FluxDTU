@@ -9,6 +9,7 @@
 #include "WebApi_errors.h"
 #include "helper.h"
 #include <AsyncJson.h>
+#include <cstring>
 
 WebApiNetworkClass::WebApiNetworkClass()
     : _applyDataTask(500 * TASK_MILLISECOND, TASK_ONCE, std::bind(&WebApiNetworkClass::applyDataTaskCb, this))
@@ -34,6 +35,7 @@ void WebApiNetworkClass::onNetworkStatus(AsyncWebServerRequest* request)
 
     AsyncJsonResponse* response = new AsyncJsonResponse();
     auto& root = response->getRoot();
+    const CONFIG_T& config = Configuration.get();
 
     root["sta_status"] = ((WiFi.getMode() & WIFI_STA) != 0);
     root["sta_ssid"] = WiFi.SSID();
@@ -52,6 +54,9 @@ void WebApiNetworkClass::onNetworkStatus(AsyncWebServerRequest* request)
     root["ap_ip"] = WiFi.softAPIP().toString();
     root["ap_mac"] = WiFi.softAPmacAddress();
     root["ap_stationnum"] = WiFi.softAPgetStationNum();
+    root["preferred_ap_bssid"] = config.WiFi.PreferredApBssid;
+    root["preferred_ap_channel"] = config.WiFi.PreferredApChannel;
+    root["preferred_ap_rssi"] = config.WiFi.PreferredApRssi;
 
     WebApi.sendJsonResponse(request, response, __FUNCTION__, __LINE__);
 }
@@ -76,6 +81,9 @@ void WebApiNetworkClass::onNetworkAdminGet(AsyncWebServerRequest* request)
     root["ssid"] = config.WiFi.Ssid;
     root["password"] = config.WiFi.Password;
     root["aptimeout"] = config.WiFi.ApTimeout;
+    root["preferred_ap_bssid"] = config.WiFi.PreferredApBssid;
+    root["preferred_ap_channel"] = config.WiFi.PreferredApChannel;
+    root["preferred_ap_rssi"] = config.WiFi.PreferredApRssi;
     root["mdnsenabled"] = config.Mdns.Enabled;
     root["syslogenabled"] = config.Syslog.Enabled;
     root["sysloghostname"] = config.Syslog.Hostname;
@@ -193,6 +201,9 @@ void WebApiNetworkClass::onNetworkAdminPost(AsyncWebServerRequest* request)
     {
         auto guard = Configuration.getWriteGuard();
         auto& config = guard.getConfig();
+        const bool wifiCredentialsChanged =
+            strcmp(config.WiFi.Ssid, root["ssid"].as<String>().c_str())
+            || strcmp(config.WiFi.Password, root["password"].as<String>().c_str());
 
         config.WiFi.Ip[0] = ipaddress[0];
         config.WiFi.Ip[1] = ipaddress[1];
@@ -216,6 +227,11 @@ void WebApiNetworkClass::onNetworkAdminPost(AsyncWebServerRequest* request)
         config.WiFi.Dns2[3] = dns2[3];
         strlcpy(config.WiFi.Ssid, root["ssid"].as<String>().c_str(), sizeof(config.WiFi.Ssid));
         strlcpy(config.WiFi.Password, root["password"].as<String>().c_str(), sizeof(config.WiFi.Password));
+        if (wifiCredentialsChanged) {
+            config.WiFi.PreferredApBssid[0] = '\0';
+            config.WiFi.PreferredApChannel = 0;
+            config.WiFi.PreferredApRssi = 0;
+        }
         strlcpy(config.WiFi.Hostname, root["hostname"].as<String>().c_str(), sizeof(config.WiFi.Hostname));
         if (root["dhcp"].as<bool>()) {
             config.WiFi.Dhcp = true;

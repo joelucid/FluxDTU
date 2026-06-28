@@ -48,6 +48,11 @@ public:
     uint8_t getSendCount() const;
     uint8_t incrementSendCount();
 
+    void setRequestHistorySeq(uint32_t seq);
+    uint32_t getRequestHistorySeq() const;
+    void setSuppressRequestHistory(bool suppress);
+    bool suppressRequestHistory() const;
+
     virtual CommandAbstract* getRequestFrameCommand(const uint8_t frame_no);
 
     virtual bool handleResponse(const fragment_t fragment[], const uint8_t max_fragment_id) = 0;
@@ -77,6 +82,8 @@ protected:
 
     uint64_t _targetAddress;
     uint64_t _routerAddress;
+    uint32_t _requestHistorySeq = 0;
+    bool _suppressRequestHistory = false;
 
     InverterAbstract* _inv;
 

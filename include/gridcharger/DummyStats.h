@@ -9,6 +9,7 @@ class DummyStats : public Stats {
 public:
     uint32_t getLastUpdate() const final { return 0; }
     std::optional<float> getInputPower() const final { return std::nullopt; }
+    std::optional<float> getOutputPower() const final { return std::nullopt; }
     void getLiveViewData(JsonVariant& root) const final {;}
     void mqttPublish() const final {;}
 };

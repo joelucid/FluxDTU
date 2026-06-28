@@ -10,11 +10,12 @@
 
 #define CONFIG_FILENAME "/config.json"
 #define CONFIG_VERSION 0x00011e00 // 0.1.30 // make sure to clean all after change
-#define CONFIG_VERSION_ONBATTERY 14
+#define CONFIG_VERSION_ONBATTERY 16
 
 #define WIFI_MAX_SSID_STRLEN 32
 #define WIFI_MAX_PASSWORD_STRLEN 64
 #define WIFI_MAX_HOSTNAME_STRLEN 31
+#define WIFI_BSSID_STRLEN 17
 
 #define SYSLOG_MAX_HOSTNAME_STRLEN 128
 
@@ -75,6 +76,7 @@ struct INVERTER_CONFIG_T {
     bool ZeroYieldDayOnMidnight;
     bool ClearEventlogOnMidnight;
     bool YieldDayCorrection;
+    uint16_t MaxPowerOverride;
     CHANNEL_CONFIG_T channel[INV_MAX_CHAN_COUNT];
 };
 
@@ -163,6 +165,12 @@ struct POWERLIMITER_FLEXIBLE_LOAD_CONFIG_T {
     char Name[FLEXIBLE_LOAD_MAX_NAME_STRLEN + 1];
     bool Enabled;
     uint8_t Priority;
+    enum EnergyMode : uint8_t {
+        SolarOnly = 0,
+        SolarAndChargerTakeover = 1,
+        HighPriorityStorage = 2,
+    };
+    EnergyMode Mode;
     char MqttTopic[MQTT_MAX_TOPIC_STRLEN + 1];
     char MqttOnPayload[MQTT_MAX_PAYLOAD_STRLEN + 1];
     char MqttOffPayload[MQTT_MAX_PAYLOAD_STRLEN + 1];
@@ -185,8 +193,12 @@ struct POWERLIMITER_FLEXIBLE_LOAD_CONFIG_T {
     uint16_t StopPowerMargin;
     uint16_t StopDelay;
     bool StopOnGridChargerLimit;
+    bool AllowGridChargerPowerTakeover;
     uint16_t BatterySupportPowerThreshold;
     uint16_t MaxBatterySupportEnergy;
+    bool BatteryBufferEnabled;
+    uint16_t BatteryBufferPowerLimit;
+    uint16_t BatteryBufferEnergyLimit;
 };
 using PowerLimiterFlexibleLoadConfig = struct POWERLIMITER_FLEXIBLE_LOAD_CONFIG_T;
 
@@ -200,11 +212,23 @@ struct POWERLIMITER_CONFIG_T {
     uint16_t TargetPowerConsumptionStorageOffset;
     int16_t BatteryTargetPowerConsumption;
     uint16_t BatteryStandbyPowerMargin;
+    bool BatteryEagerStartEnabled;
+    bool BatteryEagerStartMaximizeInverters;
+    bool BatteryDischargeCurrentLimitEnabled;
+    float BatteryDischargeCurrentLimit;
+    float BatteryDischargeCurrentPeakLimit;
+    uint16_t BatteryDischargeCurrentPeakDuration;
+    uint16_t BatteryDischargeCurrentRecoveryDuration;
     bool BatteryTargetPowerConsumptionDynamicEnabled;
     uint16_t BatteryTargetPowerConsumptionDynamicMax;
     float BatteryTargetPowerConsumptionDynamicMultiplier;
     uint16_t BatteryTargetPowerConsumptionDynamicWindow;
     uint16_t TargetPowerConsumptionHysteresis;
+    uint16_t SmallCorrectionDampingThreshold;
+    uint32_t TargetPowerConsumptionCorridorErrorThresholdWs;
+    uint32_t TargetPowerConsumptionBandErrorThresholdWs;
+    uint16_t AdaptivePlannerTargetChangeThreshold;
+    uint16_t AdaptivePlannerMaxInterval;
     uint16_t BaseLoadLimit;
     bool IgnoreSoc;
     uint16_t BatterySocStartThreshold;
@@ -219,6 +243,8 @@ struct POWERLIMITER_CONFIG_T {
     uint8_t InverterChannelIdForDcVoltage;
     uint8_t RestartHour;
     uint16_t TotalUpperPowerLimit;
+    bool FlexibleLoadEmergencyStopEnabled;
+    uint16_t FlexibleLoadEmergencyStopGridPowerLimit;
     PowerLimiterFlexibleLoadConfig FlexibleLoads[POWERLIMITER_FLEXIBLE_LOAD_MAX_COUNT];
     PowerLimiterInverterConfig Inverters[INV_MAX_COUNT];
 };
@@ -315,16 +341,22 @@ struct GRID_CHARGER_CONFIG_T {
     bool Enabled;
     bool AutoPowerEnabled;
     bool AutoPowerBatterySoCLimitsEnabled;
+    bool AutoPowerIgnoreBmsCurrent;
+    float AutoPowerBmsChargeCurrentMargin;
     bool EmergencyChargeEnabled;
     float AutoPowerVoltageLimit;
     float AutoPowerEnableVoltageLimit;
     float AutoPowerLowerPowerLimit;
     float AutoPowerUpperPowerLimit;
     uint8_t AutoPowerStopBatterySoCThreshold;
+    uint8_t AutoPowerReenableBatterySoCThreshold;
     bool AutoPowerSocPlanningEnabled;
     uint8_t AutoPowerSocPlanningDayMinSoC;
+    uint8_t AutoPowerSocPlanningIntermediateTargetSoC;
     uint8_t AutoPowerSocPlanningNightTargetSoC;
     uint16_t AutoPowerSocPlanningStartAfterSunrise;
+    uint16_t AutoPowerSocPlanningIntermediateBeforeSunset;
+    uint16_t AutoPowerSocPlanningFinalRampStartBeforeSunset;
     uint16_t AutoPowerSocPlanningFinishBeforeSunset;
     uint32_t AutoPowerSocPlanningBatteryCapacity;
     bool AutoPowerSocPlanningPowerLimitEnabled;
@@ -391,6 +423,9 @@ struct CONFIG_T {
         bool Dhcp;
         char Hostname[WIFI_MAX_HOSTNAME_STRLEN + 1];
         uint32_t ApTimeout;
+        char PreferredApBssid[WIFI_BSSID_STRLEN + 1];
+        uint8_t PreferredApChannel;
+        int8_t PreferredApRssi;
     } WiFi;
 
     struct {
